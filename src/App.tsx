@@ -1,4 +1,5 @@
 import React, { useState } from 'react'
+import { getAIResponse } from './AI_utils/AI_get_questions'
 
 const SURVEY_QUESTIONS = [
   "What's your biggest dream right now?",
@@ -86,6 +87,8 @@ export function App() {
   }
 
   const handleSubmitAnswer = () => {
+    console.log("Submitting answer:")
+    getAIResponse("what model do you wish you were?")
     if (surveyState.currentAnswer.trim()) {
       setSurveyState(prev => ({
         currentQuestionIndex: prev.currentQuestionIndex + 1,
