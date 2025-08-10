@@ -70,6 +70,7 @@ export function App() {
   const [generationError, setGenerationError] = useState<string | null>(null);
   const [lastRoomId, setLastRoomId] = useState<string | null>(null);
   const [generationPhase, setGenerationPhase] = useState<string | null>(null);
+  const [totalAnsweredCount, setTotalAnsweredCount] = useState(0);
 
   // Check if user is new or recurring on component mount
   useEffect(() => {
@@ -379,6 +380,29 @@ export function App() {
     }));
   };
 
+  useEffect(() => {
+    loadTotalAnsweredCount();
+  }, []);
+
+  const loadTotalAnsweredCount = async () => {
+    try {
+      const existingAnswersJson = await getItem({ key: STORAGE_KEYS.USER_ANSWERS });
+      if (existingAnswersJson) {
+        const existingAnswers = JSON.parse(existingAnswersJson);
+        // Count all previous answers
+        const totalCount = existingAnswers.reduce((count: number, entry: any) => {
+          return count + (entry.answers?.length || 0);
+        }, 0);
+        setTotalAnsweredCount(totalCount);
+      }
+    } catch (error) {
+      console.error('Error loading total answered count:', error);
+    }
+  };
+
+  const answeredCount = surveyState.answers.length; // Current session answers
+  const displayAnsweredCount = totalAnsweredCount + answeredCount; // Total including previous sessions
+
   const saveAnswersToLocalStorage = async () => {
     try {
       setSurveyState((prev) => ({ ...prev, isSaving: true, error: null }));
@@ -456,6 +480,41 @@ export function App() {
       }));
     }
   };
+
+  if (surveyState.showProductPage) {
+    const productCards = searches.slice(0, 5).map(search => {
+      const products = (search as any)?.products as any[] | null;
+      return products && products.length > 0 ? products[0] : null;
+    }).filter(Boolean);
+
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-purple-50 to-pink-100 flex items-center justify-center p-6">
+        <div className="text-center max-w-4xl">
+          <h1 className="text-4xl font-bold text-purple-800 mb-6">
+            Recommended Products 🛍️
+          </h1>
+          <p className="text-lg text-gray-700 mb-8">
+            Based on your personality, here are some products you might love:
+          </p>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
+            {productCards.map((product, index) => (
+              <div key={index} className="bg-white rounded-xl shadow-lg p-4">
+                <ProductLink product={product} />
+              </div>
+            ))}
+          </div>
+
+          <button 
+            onClick={() => setSurveyState(prev => ({ ...prev, showProductPage: false }))}
+            className="px-8 py-4 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white rounded-xl shadow-lg transition-all duration-300 transform hover:scale-105"
+          >
+            Back to Home
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   const clearUserSession = async () => {
     try {
@@ -568,90 +627,73 @@ export function App() {
     );
   }
 
+
+  
   // Show home page if returning user has already completed daily check-in today
   if (!surveyState.isNewUser && surveyState.hasCompletedDailyToday) {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-emerald-50 to-teal-100 flex items-center justify-center p-6">
-        <div className="text-center max-w-2xl">
-          <div className="text-6xl mb-6">✨</div>
-          <h1 className="text-4xl font-bold text-emerald-800 mb-6">
-            Welcome back! 🌟
-          </h1>
-          <p className="text-lg text-gray-700 mb-8">
-            You've already completed your daily check-in today. Come back
-            tomorrow for new reflection questions!
-          </p>
-
-          <div className="space-y-4">
-            <button
-              onClick={handleGenerateRoom}
-              disabled={isGenerating}
-              className="px-8 py-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl shadow-lg transition-all disabled:opacity-50"
-            >
-              {isGenerating ? (generationPhase ?? "Generating…") : "Generate Today's Room"}
-            </button>
-            {generationPhase && (
-              <p className="text-sm text-emerald-700">{generationPhase}</p>
-            )}
-            {generationError && (
-              <p className="text-red-600 text-sm">{generationError}</p>
-            )}
-            {generatedImageUrl && (
-              <div className="mx-auto max-w-md">
-                <div className="relative">
-                  <img src={generatedImageUrl} alt="Generated room" className="w-full rounded-xl shadow-lg" />
-                  <div className="absolute inset-0">
-                    <Hotspots boxes={buildDefaultBoxes()} />
-                  </div>
-                </div>
-                <div className="mt-4 flex justify-center">
-                  <button onClick={handleShareRoom} className="px-6 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg">
-                    Share Room
-                  </button>
+  return (
+    
+    <div className="min-h-screen bg-gradient-to-br from-emerald-50 to-teal-100 flex items-center justify-center p-6 ">
+      <div className="text-center max-w-2xl">
+        <div className="text-6xl mb-6">✨</div>
+        <h1 className="text-4xl font-bold text-emerald-800 mb-6">
+          Welcome back! 🌟
+        </h1>
+        <p className="text-lg text-gray-700 mb-8">
+          You've already completed your daily check-in today. Come back
+          tomorrow for new reflection questions!
+        </p>
+        <p className="text-lg text-gray-700 mb-8">
+          {!surveyState.isNewUser && totalAnsweredCount > 0 && (
+            <span className="block text-sm text-gray-600 mt-2">
+              Total questions answered: {displayAnsweredCount}
+            </span>
+          )}
+        </p>
+        
+        <div className="space-y-6">
+          <button
+            onClick={handleGenerateRoom}
+            disabled={isGenerating}
+            className="px-8 py-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl shadow-lg transition-all disabled:opacity-50"
+          >
+            {isGenerating ? (generationPhase ?? "Generating…") : "Generate Today's Room"}
+          </button>
+          
+          <button
+            onClick={() => setSurveyState(prev => ({ ...prev, showProductPage: true }))}
+            className="px-8 py-4 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white rounded-xl shadow-lg transition-all duration-300 transform hover:scale-105"
+          >
+            View Recommended Products 🛍️
+          </button>
+          
+          {generatedImageUrl && (
+            <div className="mx-auto max-w-md mt-8">
+              <div className="relative">
+                <img src={generatedImageUrl} alt="Generated room" className="w-full rounded-xl shadow-lg" />
+                <div className="absolute inset-0">
+                  <Hotspots boxes={buildDefaultBoxes()} />
                 </div>
               </div>
-            )}
-            {/* <button
-              onClick={() => setSurveyState(prev => ({
-                ...prev,
-                hasCompletedDailyToday: false,
-                currentQuestionIndex: 0,
-                answers: [],
-                currentAnswer: "",
-              }))}
-              className="px-8 py-4 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white rounded-xl shadow-lg transition-all duration-300 transform hover:scale-105"
-            >
-              Take Another Daily Check-in
-            </button> */}
-
-            <div className="flex gap-3">
-              <button
-                onClick={logSessionStorage}
-                className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-all duration-300"
-              >
-                📊 Log Storage Data
-              </button>
-              
-              <button
-                onClick={clearUserSession}
-                className="px-6 py-3 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-all duration-300"
-              >
-                🗑️ Clear Session
-              </button>
+              <div className="mt-4 flex justify-center">
+                <button onClick={handleShareRoom} className="px-6 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg">
+                  Share Room
+                </button>
+              </div>
             </div>
+          )}
 
-            <p className="text-sm text-gray-500 mt-4">
-              Check console for storage data • Next check-in available tomorrow
-            </p>
-          </div>
+          <p className="text-sm text-gray-500 mt-4">
+            Check console for storage data • Next check-in available tomorrow
+          </p>
         </div>
       </div>
-    );
-  }
+    </div>
+  );
+}
 
   const questions = getCurrentQuestions();
   const isComplete = surveyState.currentQuestionIndex >= questions.length;
-  const answeredCount = surveyState.answers.length;
 
   // Show ProductLink page after completing survey and saving answers
   if (isComplete && surveyState.showProductPage) {
@@ -713,6 +755,11 @@ export function App() {
           </h1>
           <p className="text-lg text-gray-700 mb-8">
             You answered {answeredCount} out of {questions.length} questions.
+            {!surveyState.isNewUser && totalAnsweredCount > 0 && (
+              <span className="block text-sm text-gray-600 mt-2">
+                Total questions answered: {displayAnsweredCount}
+              </span>
+            )}
           </p>
 
           {answeredCount > 0 && (
