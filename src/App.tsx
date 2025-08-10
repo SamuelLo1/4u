@@ -1,5 +1,8 @@
-import React, { useState, useEffect } from "react";
-import { useAsyncStorage } from "@shopify/shop-minis-react";
+import React, { useEffect, useMemo, useState } from "react";
+import { useAsyncStorage, useProductSearch } from "@shopify/shop-minis-react";
+import { saveRoom, shareRoom, composePhasedBase } from "./lib/api";
+import { Hotspots } from "./components/Hotspots";
+import { buildDefaultBoxes } from "./lib/slots";
 
 // Hardcoded UUID for now - in production this would come from user authentication
 const USER_UUID = "123e4567-e89b-12d3-a456-426614174000";
@@ -59,6 +62,13 @@ export function App() {
 
   const { getItem, setItem, getAllKeys } = useAsyncStorage();
 
+  // Room generation state
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [generatedImageUrl, setGeneratedImageUrl] = useState<string | null>(null);
+  const [generationError, setGenerationError] = useState<string | null>(null);
+  const [lastRoomId, setLastRoomId] = useState<string | null>(null);
+  const [generationPhase, setGenerationPhase] = useState<string | null>(null);
+
   // Check if user is new or recurring on component mount
   useEffect(() => {
     checkUserStatus();
@@ -114,6 +124,89 @@ export function App() {
 
   const getCurrentQuestions = () => {
     return surveyState.isNewUser ? INITIAL_SURVEY_QUESTIONS : DAILY_QUESTIONS;
+  };
+
+  const personalityHint = useMemo(() => {
+    const joined = surveyState.answers.map(a => a.answer).join(" ").toLowerCase();
+    if (joined.includes("ocean") || joined.includes("calm")) return { vibe: "calm coastal", palette: "soft blues and sandy neutrals" };
+    if (joined.includes("city") || joined.includes("tech")) return { vibe: "modern tech", palette: "cool grays with neon accents" };
+    if (joined.includes("nature") || joined.includes("forest")) return { vibe: "nature-inspired", palette: "greens, wood tones, warm whites" };
+    if (joined.includes("sport") || joined.includes("gym") || joined.includes("tennis") || joined.includes("surf")) return { vibe: "active sporty", palette: "fresh greens and ocean blues" };
+    return { vibe: "cozy minimalist", palette: "warm neutrals with gentle contrast" };
+  }, [surveyState.answers]);
+
+  // Build text queries based on personality to fetch products (6 items)
+  const productQueries = useMemo(() => {
+    const vibe = personalityHint.vibe
+    // Rough mapping from vibe to product categories
+    if (vibe.includes('coastal')) return ['bed frame', 'rattan lamp', 'linen bedding', 'ocean wall art', 'indoor plant', 'jute rug']
+    if (vibe.includes('modern')) return ['minimal desk', 'sleek chair', 'LED lamp', 'abstract wall art', 'laptop stand', 'geometric rug']
+    if (vibe.includes('nature')) return ['wood nightstand', 'stoneware lamp', 'cotton bedding', 'botanical wall art', 'planter', 'wool rug']
+    if (vibe.includes('sport')) return ['athletic shoes', 'duffle bag', 'sports rack', 'foam roller', 'water bottle', 'poster frame']
+    return ['bed frame', 'nightstand lamp', 'cotton bedding', 'framed wall art', 'indoor plant', 'area rug']
+  }, [personalityHint.vibe])
+
+  // Use up to 6 queries; aggregate results
+  const searches = productQueries.slice(0, 6).map(q => useProductSearch({ query: q, first: 10 }))
+  const productTexts = useMemo(() => {
+    const items: string[] = []
+    for (const s of searches) {
+      const ps = (s as any)?.products as any[] | null
+      if (ps && ps.length > 0) {
+        // Take top result name + snippet description
+        const p = ps[0]
+        const title = p?.title || ''
+        const desc = p?.description || p?.descriptionHtml || ''
+        if (title) items.push(`${title}: ${String(desc).slice(0,140)}`)
+      }
+    }
+    return items
+  }, [searches.map(s => (s as any)?.products)?.join('|')])
+
+  const handleGenerateRoom = async () => {
+    setIsGenerating(true);
+    setGenerationError(null);
+    setGeneratedImageUrl(null);
+
+    const inventoryText = productTexts.length > 0 ? `\nUse items inspired by: ${productTexts.join('; ')}` : ''
+    const prompt = `An isometric pixel art bedroom with 45-degree walls and a grid floor, cozy, minimalist, clean black outlines, bright saturated colors with subtle dithering. Keep layout realistic and uncluttered. Personality vibe: ${personalityHint.vibe}. Palette: ${personalityHint.palette}. Maintain isometric perspective and consistent camera angle.${inventoryText}`;
+    const negativePrompt = "blurry, extra limbs, deformed, wrong perspective, cluttered, text, watermark, logo, non-isometric, incorrect camera angle, photorealistic";
+
+    try {
+      // Phased feedback for UX
+      setGenerationPhase('Generating room…')
+      const { baseB64 } = await composePhasedBase({ prompt, paletteHint: personalityHint.palette })
+
+      // Pure text-based approach: no sprites; the base image is the final image
+      setGenerationPhase('Finalizing…')
+      const imageUrl = `data:image/png;base64,${baseB64}`
+      setGeneratedImageUrl(imageUrl ?? null)
+      setGenerationPhase(null)
+      if (imageUrl) {
+        const { roomId } = await saveRoom({ seed: Math.floor(Math.random()*1e7), imageUrl })
+        setLastRoomId(roomId)
+      }
+    } catch (err: any) {
+      setGenerationError(err?.message ?? "Failed to generate room");
+    } finally {
+      setIsGenerating(false);
+      setGenerationPhase(null)
+    }
+  };
+
+  const handleShareRoom = async () => {
+    if (!lastRoomId) return;
+    try {
+      const { shareToken } = await shareRoom(lastRoomId);
+      const url = new URL(window.location.href);
+      url.searchParams.set("t", shareToken);
+      if (navigator.share) {
+        await navigator.share({ title: "My Room", url: url.toString() });
+      }
+      await navigator.clipboard?.writeText(url.toString());
+    } catch (e) {
+      console.error(e);
+    }
   };
 
   const handleAnswerChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -274,6 +367,34 @@ export function App() {
           </p>
 
           <div className="space-y-4">
+            <button
+              onClick={handleGenerateRoom}
+              disabled={isGenerating}
+              className="px-8 py-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl shadow-lg transition-all disabled:opacity-50"
+            >
+              {isGenerating ? (generationPhase ?? "Generating…") : "Generate Today's Room"}
+            </button>
+            {generationPhase && (
+              <p className="text-sm text-emerald-700">{generationPhase}</p>
+            )}
+            {generationError && (
+              <p className="text-red-600 text-sm">{generationError}</p>
+            )}
+            {generatedImageUrl && (
+              <div className="mx-auto max-w-md">
+                <div className="relative">
+                  <img src={generatedImageUrl} alt="Generated room" className="w-full rounded-xl shadow-lg" />
+                  <div className="absolute inset-0">
+                    <Hotspots boxes={buildDefaultBoxes()} />
+                  </div>
+                </div>
+                <div className="mt-4 flex justify-center">
+                  <button onClick={handleShareRoom} className="px-6 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg">
+                    Share Room
+                  </button>
+                </div>
+              </div>
+            )}
             {/* <button
               onClick={() => setSurveyState(prev => ({
                 ...prev,
@@ -333,13 +454,44 @@ export function App() {
                 )}
               </button>
 
+              <button
+                onClick={handleGenerateRoom}
+                disabled={isGenerating}
+                className="px-8 py-4 bg-green-600 hover:bg-green-700 text-white rounded-xl shadow-lg transition-all disabled:opacity-50"
+              >
+                {isGenerating ? (generationPhase ?? "Generating…") : "Generate My Room"}
+              </button>
+              {generationPhase && (
+                <p className="text-sm text-green-700">{generationPhase}</p>
+              )}
+
               {surveyState.error && (
                 <p className="text-red-600 text-sm">{surveyState.error}</p>
+              )}
+
+              {generationError && (
+                <p className="text-red-600 text-sm">{generationError}</p>
+              )}
+
+              {generatedImageUrl && (
+                <div className="mx-auto max-w-md">
+                  <div className="relative">
+                    <img src={generatedImageUrl} alt="Generated room" className="w-full rounded-xl shadow-lg" />
+                    <div className="absolute inset-0">
+                      <Hotspots boxes={buildDefaultBoxes()} />
+                    </div>
+                  </div>
+                  <div className="mt-4 flex justify-center">
+                    <button onClick={handleShareRoom} className="px-6 py-3 bg-green-600 hover:bg-green-700 text-white rounded-lg">
+                      Share Room
+                    </button>
+                  </div>
+                </div>
               )}
             </div>
           )}
 
-          <button
+          <button 
             onClick={() =>
               setSurveyState({
                 currentQuestionIndex: 0,
@@ -398,7 +550,7 @@ export function App() {
           <h1 className="text-2xl font-bold text-gray-800 mb-6">
             {questions[surveyState.currentQuestionIndex]}
           </h1>
-
+          
           <div className="relative">
             <textarea
               value={surveyState.currentAnswer}
@@ -436,8 +588,8 @@ export function App() {
         <div className="mt-8 pt-6 border-t border-gray-100">
           <p className="text-xs text-gray-400 text-center">
             User ID: {USER_UUID.slice(0, 8)}...
-          </p>
-        </div>
+            </p>
+          </div>
       </div>
     </div>
   );

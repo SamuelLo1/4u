@@ -85,3 +85,48 @@ export async function shareRoom(roomId: string) {
   return (await resp.json()) as {shareToken: string}
 }
 
+export async function composeRoom(params: {
+  prompt: string
+  productUrls: string[]
+  paletteHint?: string
+  size?: '1024x1024' | '1536x1024' | '1024x1536'
+}) {
+  const resp = await fetch(`${API_BASE}/api/compose-room`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(params),
+  })
+  if (!resp.ok) throw new Error('Compose failed')
+  return (await resp.json()) as {imageUrl: string}
+}
+
+export async function composePhasedBase(params: {prompt: string; paletteHint?: string; size?: string}) {
+  const resp = await fetch(`${API_BASE}/api/base-room`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(params),
+  })
+  if (!resp.ok) throw new Error('Base failed')
+  return (await resp.json()) as {baseB64: string}
+}
+
+export async function composePhasedStylize(url: string) {
+  const resp = await fetch(`${API_BASE}/api/stylize-product`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({url}),
+  })
+  if (!resp.ok) throw new Error('Stylize failed')
+  return (await resp.json()) as {spriteB64: string}
+}
+
+export async function composePhasedFinalize(baseB64: string, spriteB64s: string[]) {
+  const resp = await fetch(`${API_BASE}/api/compose-final`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({baseB64, spriteB64s}),
+  })
+  if (!resp.ok) throw new Error('Compose finalize failed')
+  return (await resp.json()) as {imageUrl: string}
+}
+
