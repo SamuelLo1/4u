@@ -3,6 +3,7 @@ import { useAsyncStorage, useProductSearch } from "@shopify/shop-minis-react";
 import { saveRoom, shareRoom, composePhasedBase } from "./lib/api";
 import { Hotspots } from "./components/Hotspots";
 import { buildDefaultBoxes } from "./lib/slots";
+import { INITIAL_SURVEY_QUESTIONS, DAILY_QUESTIONS, SelectedAnswer, Question } from "./questions";
 
 // Hardcoded UUID for now - in production this would come from user authentication
 const USER_UUID = "123e4567-e89b-12d3-a456-426614174000";
@@ -19,28 +20,10 @@ const getTodayDateString = () => {
   return new Date().toISOString().split("T")[0]; // YYYY-MM-DD format
 };
 
-// Initial onboarding survey questions
-const INITIAL_SURVEY_QUESTIONS = [
-  "What's your biggest dream right now?",
-  "Describe a moment that changed your perspective on life.",
-  "If you could have dinner with anyone, living or dead, who would it be and why?",
-  "What's something you've always wanted to learn but haven't yet?",
-  "Describe your ideal day from start to finish.",
-];
-
-// Daily check-in questions for recurring users
-const DAILY_QUESTIONS = [
-  "What are you most grateful for today?",
-  "What's one small win you had today?",
-  "How are you feeling right now on a scale of 1-10?",
-  "What's one thing you're looking forward to tomorrow?",
-  "What challenged you today and how did you handle it?",
-];
-
 interface SurveyState {
   currentQuestionIndex: number;
-  answers: Array<{ question: string; answer: string }>;
-  currentAnswer: string;
+  answers: SelectedAnswer[];
+  selectedChoiceId: string | null;
   isNewUser: boolean | null;
   hasCompletedDailyToday: boolean | null;
   isLoading: boolean;
@@ -52,7 +35,7 @@ export function App() {
   const [surveyState, setSurveyState] = useState<SurveyState>({
     currentQuestionIndex: 0,
     answers: [],
-    currentAnswer: "",
+    selectedChoiceId: null,
     isNewUser: null,
     hasCompletedDailyToday: null,
     isLoading: true,
@@ -60,7 +43,7 @@ export function App() {
     error: null,
   });
 
-  const { getItem, setItem, getAllKeys } = useAsyncStorage();
+  const { getItem, setItem, getAllKeys, clear } = useAsyncStorage();
 
   // Room generation state
   const [isGenerating, setIsGenerating] = useState(false);
@@ -127,11 +110,29 @@ export function App() {
   };
 
   const personalityHint = useMemo(() => {
-    const joined = surveyState.answers.map(a => a.answer).join(" ").toLowerCase();
-    if (joined.includes("ocean") || joined.includes("calm")) return { vibe: "calm coastal", palette: "soft blues and sandy neutrals" };
-    if (joined.includes("city") || joined.includes("tech")) return { vibe: "modern tech", palette: "cool grays with neon accents" };
-    if (joined.includes("nature") || joined.includes("forest")) return { vibe: "nature-inspired", palette: "greens, wood tones, warm whites" };
-    if (joined.includes("sport") || joined.includes("gym") || joined.includes("tennis") || joined.includes("surf")) return { vibe: "active sporty", palette: "fresh greens and ocean blues" };
+    const allTags = surveyState.answers.flatMap(a => a.tags);
+    const tagCounts = allTags.reduce((acc, tag) => {
+      acc[tag] = (acc[tag] || 0) + 1;
+      return acc;
+    }, {} as Record<string, number>);
+
+    // Determine vibe based on most frequent tags
+    if (tagCounts['tech-friendly'] || tagCounts['modern'] || tagCounts['sleek']) {
+      return { vibe: "modern tech", palette: "cool grays with neon accents" };
+    }
+    if (tagCounts['outdoor'] || tagCounts['adventure'] || tagCounts['practical']) {
+      return { vibe: "nature-inspired", palette: "greens, wood tones, warm whites" };
+    }
+    if (tagCounts['cozy'] || tagCounts['homebody'] || tagCounts['comfort-first']) {
+      return { vibe: "cozy minimalist", palette: "warm neutrals with gentle contrast" };
+    }
+    if (tagCounts['minimal'] || tagCounts['organized'] || tagCounts['monochrome']) {
+      return { vibe: "calm coastal", palette: "soft blues and sandy neutrals" };
+    }
+    if (tagCounts['vibrant'] || tagCounts['colorful'] || tagCounts['playful']) {
+      return { vibe: "eclectic vibrant", palette: "bright colors with energetic contrasts" };
+    }
+    
     return { vibe: "cozy minimalist", palette: "warm neutrals with gentle contrast" };
   }, [surveyState.answers]);
 
@@ -209,35 +210,40 @@ export function App() {
     }
   };
 
-  const handleAnswerChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const value = e.target.value.slice(0, 500);
-    setSurveyState((prev) => ({ ...prev, currentAnswer: value }));
+  const handleChoiceSelect = (choiceId: string) => {
+    setSurveyState((prev) => ({ ...prev, selectedChoiceId: choiceId }));
   };
 
   const handleSubmitAnswer = () => {
-    if (surveyState.currentAnswer.trim()) {
+    if (surveyState.selectedChoiceId) {
       const questions = getCurrentQuestions();
       const currentQuestion = questions[surveyState.currentQuestionIndex];
+      const selectedChoice = currentQuestion.choices.find(
+        (choice) => choice.id === surveyState.selectedChoiceId
+      );
 
-      setSurveyState((prev) => ({
-        ...prev,
-        answers: [
-          ...prev.answers,
-          { question: currentQuestion, answer: prev.currentAnswer },
-        ],
-        currentAnswer: "",
-        currentQuestionIndex: prev.currentQuestionIndex + 1,
-      }));
+      if (selectedChoice) {
+        const answer: SelectedAnswer = {
+          questionId: currentQuestion.id,
+          choiceId: selectedChoice.id,
+          choiceText: selectedChoice.text,
+          tags: selectedChoice.tags,
+        };
+
+        setSurveyState((prev) => ({
+          ...prev,
+          answers: [...prev.answers, answer],
+          selectedChoiceId: null,
+          currentQuestionIndex: prev.currentQuestionIndex + 1,
+        }));
+      }
     }
   };
 
   const handleSkip = () => {
-    const questions = getCurrentQuestions();
-    const currentQuestion = questions[surveyState.currentQuestionIndex];
-
     setSurveyState((prev) => ({
       ...prev,
-      answers: [...prev.answers, { question: currentQuestion, answer: "" }],
+      selectedChoiceId: null,
       currentQuestionIndex: prev.currentQuestionIndex + 1,
     }));
   };
@@ -246,10 +252,8 @@ export function App() {
     try {
       setSurveyState((prev) => ({ ...prev, isSaving: true, error: null }));
 
-      // Filter out skipped questions and prepare data for storage
-      const answersToSave = surveyState.answers.filter(
-        (item) => item.answer.trim() !== ""
-      );
+      // All answers are valid (no need to filter for empty text answers)
+      const answersToSave = surveyState.answers;
 
       if (answersToSave.length === 0) {
         setSurveyState((prev) => ({
@@ -304,7 +308,7 @@ export function App() {
       setSurveyState({
         currentQuestionIndex: 0,
         answers: [],
-        currentAnswer: "",
+        selectedChoiceId: null,
         isNewUser: false, // User is no longer new after completing initial survey
         hasCompletedDailyToday: !surveyState.isNewUser, // Mark daily as completed if this was a daily check-in
         isLoading: false,
@@ -318,6 +322,68 @@ export function App() {
         isSaving: false,
         error: "Failed to save your answers. Please try again.",
       }));
+    }
+  };
+
+  const clearUserSession = async () => {
+    try {
+      await clear();
+      console.log('🗑️ All user data cleared');
+      // Reset the app state
+      setSurveyState({
+        currentQuestionIndex: 0,
+        answers: [],
+        selectedChoiceId: null,
+        isNewUser: null,
+        hasCompletedDailyToday: null,
+        isLoading: true,
+        isSaving: false,
+        error: null,
+      });
+      // Re-check user status
+      checkUserStatus();
+    } catch (error) {
+      console.error('Error clearing session:', error);
+    }
+  };
+
+  const logSessionStorage = async () => {
+    try {
+      console.log('📊 Current Session Storage Data:');
+      console.log('=====================================');
+      
+      // Get all keys
+      const allKeys = await getAllKeys();
+      console.log('All storage keys:', allKeys);
+      
+      // Get user-specific data
+      const userAnswers = await getItem({ key: STORAGE_KEYS.USER_ANSWERS });
+      const userStatus = await getItem({ key: STORAGE_KEYS.USER_STATUS });
+      const dailyCheckIn = await getItem({ key: STORAGE_KEYS.DAILY_CHECK_IN });
+      
+      console.log('📝 User Answers:', userAnswers ? JSON.parse(userAnswers) : null);
+      console.log('👤 User Status:', userStatus);
+      console.log('📅 Daily Check-in:', dailyCheckIn ? JSON.parse(dailyCheckIn) : null);
+      
+      // Current app state
+      console.log('🔄 Current App State:');
+      console.log('  - Is New User:', surveyState.isNewUser);
+      console.log('  - Has Completed Daily Today:', surveyState.hasCompletedDailyToday);
+      console.log('  - Current Question Index:', surveyState.currentQuestionIndex);
+      console.log('  - Current Answers Count:', surveyState.answers.length);
+      console.log('  - Selected Choice:', surveyState.selectedChoiceId);
+      
+      // Show current personality analysis if answers exist
+      if (surveyState.answers.length > 0) {
+        const allTags = surveyState.answers.flatMap(a => a.tags);
+        console.log('🎯 Current Tags:', allTags);
+        console.log('🎨 Personality Hint:', personalityHint);
+      }
+      
+      console.log('=====================================');
+      
+    } catch (error) {
+      console.error('Error logging session storage:', error);
     }
   };
 
@@ -408,8 +474,24 @@ export function App() {
               Take Another Daily Check-in
             </button> */}
 
+            <div className="flex gap-3">
+              <button
+                onClick={logSessionStorage}
+                className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-all duration-300"
+              >
+                📊 Log Storage Data
+              </button>
+              
+              <button
+                onClick={clearUserSession}
+                className="px-6 py-3 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-all duration-300"
+              >
+                🗑️ Clear Session
+              </button>
+            </div>
+
             <p className="text-sm text-gray-500 mt-4">
-              Next check-in available tomorrow
+              Check console for storage data • Next check-in available tomorrow
             </p>
           </div>
         </div>
@@ -419,9 +501,7 @@ export function App() {
 
   const questions = getCurrentQuestions();
   const isComplete = surveyState.currentQuestionIndex >= questions.length;
-  const answeredCount = surveyState.answers.filter(
-    (a) => a.answer.trim() !== ""
-  ).length;
+  const answeredCount = surveyState.answers.length;
 
   // Survey complete state
   if (isComplete) {
@@ -496,7 +576,7 @@ export function App() {
               setSurveyState({
                 currentQuestionIndex: 0,
                 answers: [],
-                currentAnswer: "",
+                selectedChoiceId: null,
                 isNewUser: surveyState.isNewUser,
                 hasCompletedDailyToday: surveyState.hasCompletedDailyToday,
                 isLoading: false,
@@ -548,21 +628,34 @@ export function App() {
         {/* Question */}
         <div className="mb-8">
           <h1 className="text-2xl font-bold text-gray-800 mb-6">
-            {questions[surveyState.currentQuestionIndex]}
+            {questions[surveyState.currentQuestionIndex].text}
           </h1>
           
-          <div className="relative">
-            <textarea
-              value={surveyState.currentAnswer}
-              onChange={handleAnswerChange}
-              placeholder="Share your thoughts..."
-              maxLength={500}
-              rows={5}
-              className="w-full p-4 border-2 border-gray-200 rounded-xl resize-none focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all duration-300"
-            />
-            <div className="text-right text-sm text-gray-400 mt-2">
-              {surveyState.currentAnswer.length}/500
-            </div>
+          <div className="space-y-3">
+            {questions[surveyState.currentQuestionIndex].choices.map((choice) => (
+              <button
+                key={choice.id}
+                onClick={() => handleChoiceSelect(choice.id)}
+                className={`w-full p-4 text-left rounded-xl border-2 transition-all duration-300 ${
+                  surveyState.selectedChoiceId === choice.id
+                    ? "border-indigo-500 bg-indigo-50 text-indigo-900"
+                    : "border-gray-200 bg-white hover:border-indigo-300 hover:bg-indigo-25"
+                }`}
+              >
+                <div className="flex items-start">
+                  <div className={`w-4 h-4 rounded-full border-2 mr-3 mt-0.5 flex-shrink-0 ${
+                    surveyState.selectedChoiceId === choice.id
+                      ? "border-indigo-500 bg-indigo-500"
+                      : "border-gray-300"
+                  }`}>
+                    {surveyState.selectedChoiceId === choice.id && (
+                      <div className="w-full h-full rounded-full bg-white scale-50"></div>
+                    )}
+                  </div>
+                  <span className="text-gray-800 leading-relaxed">{choice.text}</span>
+                </div>
+              </button>
+            ))}
           </div>
         </div>
 
@@ -577,7 +670,7 @@ export function App() {
 
           <button
             onClick={handleSubmitAnswer}
-            disabled={!surveyState.currentAnswer.trim()}
+            disabled={!surveyState.selectedChoiceId}
             className="px-8 py-3 bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-700 hover:to-blue-700 text-white rounded-xl shadow-md transition-all duration-300 transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
           >
             Next
