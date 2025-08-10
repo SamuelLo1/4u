@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { useAsyncStorage, useProductSearch } from "@shopify/shop-minis-react";
+import { useAsyncStorage, useProductSearch, ProductLink } from "@shopify/shop-minis-react";
 import { saveRoom, shareRoom, composePhasedBase } from "./lib/api";
 import { Hotspots } from "./components/Hotspots";
 import { buildDefaultBoxes } from "./lib/slots";
@@ -46,6 +46,7 @@ interface SurveyState {
   isLoading: boolean;
   isSaving: boolean;
   error: string | null;
+  showProductPage: boolean;
 }
 
 export function App() {
@@ -58,6 +59,7 @@ export function App() {
     isLoading: true,
     isSaving: false,
     error: null,
+    showProductPage: false,
   });
 
   const { getItem, setItem, getAllKeys } = useAsyncStorage();
@@ -170,7 +172,6 @@ export function App() {
 
     const inventoryText = productTexts.length > 0 ? `\nUse items inspired by: ${productTexts.join('; ')}` : ''
     const prompt = `An isometric pixel art bedroom with 45-degree walls and a grid floor, cozy, minimalist, clean black outlines, bright saturated colors with subtle dithering. Keep layout realistic and uncluttered. Personality vibe: ${personalityHint.vibe}. Palette: ${personalityHint.palette}. Maintain isometric perspective and consistent camera angle.${inventoryText}`;
-    const negativePrompt = "blurry, extra limbs, deformed, wrong perspective, cluttered, text, watermark, logo, non-isometric, incorrect camera angle, photorealistic";
 
     try {
       // Phased feedback for UX
@@ -310,6 +311,7 @@ export function App() {
         isLoading: false,
         isSaving: false,
         error: null,
+        showProductPage: true, // Show the product page after saving answers
       });
     } catch (error) {
       console.error("Error saving answers:", error);
@@ -423,6 +425,54 @@ export function App() {
     (a) => a.answer.trim() !== ""
   ).length;
 
+  // Show ProductLink page after completing survey and saving answers
+  if (isComplete && surveyState.showProductPage) {
+    const productCards = searches.slice(0, 5).map(search => {
+      const products = (search as any)?.products as any[] | null;
+      return products && products.length > 0 ? products[0] : null;
+    }).filter(Boolean);
+
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-purple-50 to-pink-100 flex items-center justify-center p-6">
+        <div className="text-center max-w-4xl">
+          <h1 className="text-4xl font-bold text-purple-800 mb-6">
+            Recommended Products 🛍️
+          </h1>
+          <p className="text-lg text-gray-700 mb-8">
+            Based on your personality, here are some products you might love:
+          </p>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
+            {productCards.map((product, index) => (
+              <div key={index} className="bg-white rounded-xl shadow-lg p-4">
+                <ProductLink product={product} />
+              </div>
+            ))}
+          </div>
+
+          <button 
+            onClick={() =>
+              setSurveyState({
+                currentQuestionIndex: 0,
+                answers: [],
+                currentAnswer: "",
+                isNewUser: surveyState.isNewUser,
+                hasCompletedDailyToday: surveyState.hasCompletedDailyToday,
+                isLoading: false,
+                isSaving: false,
+                error: null,
+                showProductPage: false,
+              })
+            }
+            className="px-8 py-4 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white rounded-xl shadow-lg transition-all duration-300 transform hover:scale-105"
+          >
+            Start Over
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   // Survey complete state
   if (isComplete) {
     return (
@@ -452,6 +502,13 @@ export function App() {
                 ) : (
                   "Save My Answers"
                 )}
+              </button>
+
+              <button
+                onClick={() => setSurveyState(prev => ({ ...prev, showProductPage: true }))}
+                className="px-8 py-4 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white rounded-xl shadow-lg transition-all duration-300 transform hover:scale-105"
+              >
+                View Recommended Products 🛍️
               </button>
 
               <button
@@ -502,6 +559,7 @@ export function App() {
                 isLoading: false,
                 isSaving: false,
                 error: null,
+                showProductPage: false,
               })
             }
             className="mt-4 px-6 py-3 text-gray-600 hover:text-gray-800 transition-colors"
