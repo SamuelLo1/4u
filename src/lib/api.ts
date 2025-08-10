@@ -130,6 +130,28 @@ export async function composePhasedFinalize(baseB64: string, spriteB64s: string[
   return (await resp.json()) as {imageUrl: string}
 }
 
+export type PersonalityProducts = {
+  personality: {
+    label: string
+    description: string
+    palette: string[]
+    vibe: string
+    materials: string[]
+    budget: 'LOW'|'MID'|'HIGH'
+  }
+  products: Array<{name: string; searchQuery: string; category: string; styleHints: string[]; colorHints: string[]; rationale: string}>
+}
+
+export async function getPersonalityAndProductsFromAnswers(userAnswers: Array<{questionId: string; choiceId: string; choiceText: string; tags: string[]}>) {
+  const resp = await fetch(`${API_BASE}/api/personality-products`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({userAnswers}),
+  })
+  if (!resp.ok) throw new Error('Failed to score personality')
+  return (await resp.json()) as PersonalityProducts
+}
+
 export async function generateDailyQuestions(params: {
   userAnswers: Array<{
     questionId: string
