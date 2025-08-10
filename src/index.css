@@ -1,1 +1,6 @@
 @import "@shopify/shop-minis-react/styles";
+
+/* Override fonts to use system fonts instead of external fonts */
+* {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif !important;
+}
