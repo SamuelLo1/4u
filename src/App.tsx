@@ -8,6 +8,12 @@ const USER_UUID = "123e4567-e89b-12d3-a456-426614174000";
 const STORAGE_KEYS = {
   USER_ANSWERS: `user_answers_${USER_UUID}`,
   USER_STATUS: `user_status_${USER_UUID}`,
+  DAILY_CHECK_IN: `daily_checkin_${USER_UUID}`,
+};
+
+// Utility function to get today's date as a string
+const getTodayDateString = () => {
+  return new Date().toISOString().split("T")[0]; // YYYY-MM-DD format
 };
 
 // Initial onboarding survey questions
@@ -33,6 +39,7 @@ interface SurveyState {
   answers: Array<{ question: string; answer: string }>;
   currentAnswer: string;
   isNewUser: boolean | null;
+  hasCompletedDailyToday: boolean | null;
   isLoading: boolean;
   isSaving: boolean;
   error: string | null;
@@ -44,12 +51,13 @@ export function App() {
     answers: [],
     currentAnswer: "",
     isNewUser: null,
+    hasCompletedDailyToday: null,
     isLoading: true,
     isSaving: false,
     error: null,
   });
 
-  const { getItem, setItem } = useAsyncStorage();
+  const { getItem, setItem, getAllKeys } = useAsyncStorage();
 
   // Check if user is new or recurring on component mount
   useEffect(() => {
@@ -64,9 +72,34 @@ export function App() {
       const existingAnswers = await getItem({ key: STORAGE_KEYS.USER_ANSWERS });
       const isNewUser = !existingAnswers;
 
+      // Debug logging
+      const allKeys = await getAllKeys();
+      console.log('🔍 Debug Storage Data:');
+      console.log('All storage keys:', allKeys);
+      console.log('Existing answers:', existingAnswers);
+      console.log('Is new user:', isNewUser);
+      console.log('Today date:', getTodayDateString());
+
+      // Check if user has completed daily check-in today
+      let hasCompletedDailyToday = false;
+      if (!isNewUser) {
+        const dailyCheckInData = await getItem({
+          key: STORAGE_KEYS.DAILY_CHECK_IN,
+        });
+        console.log('Daily check-in data:', dailyCheckInData);
+        if (dailyCheckInData) {
+          const { lastCompletedDate } = JSON.parse(dailyCheckInData);
+          console.log('Last completed date:', lastCompletedDate);
+          hasCompletedDailyToday = lastCompletedDate === getTodayDateString();
+        }
+      }
+
+      console.log('Has completed daily today:', hasCompletedDailyToday);
+
       setSurveyState((prev) => ({
         ...prev,
         isNewUser,
+        hasCompletedDailyToday,
         isLoading: false,
       }));
     } catch (error) {
@@ -163,12 +196,24 @@ export function App() {
         value: "returning",
       });
 
+      // If this was a daily check-in, update the daily completion status
+      if (!surveyState.isNewUser) {
+        await setItem({
+          key: STORAGE_KEYS.DAILY_CHECK_IN,
+          value: JSON.stringify({
+            lastCompletedDate: getTodayDateString(),
+            completedAt: new Date().toISOString(),
+          }),
+        });
+      }
+
       // Reset the survey state after successful save
       setSurveyState({
         currentQuestionIndex: 0,
         answers: [],
         currentAnswer: "",
         isNewUser: false, // User is no longer new after completing initial survey
+        hasCompletedDailyToday: !surveyState.isNewUser, // Mark daily as completed if this was a daily check-in
         isLoading: false,
         isSaving: false,
         error: null,
@@ -209,6 +254,43 @@ export function App() {
           >
             Try Again
           </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Show home page if returning user has already completed daily check-in today
+  if (!surveyState.isNewUser && surveyState.hasCompletedDailyToday) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-emerald-50 to-teal-100 flex items-center justify-center p-6">
+        <div className="text-center max-w-2xl">
+          <div className="text-6xl mb-6">✨</div>
+          <h1 className="text-4xl font-bold text-emerald-800 mb-6">
+            Welcome back! 🌟
+          </h1>
+          <p className="text-lg text-gray-700 mb-8">
+            You've already completed your daily check-in today. Come back
+            tomorrow for new reflection questions!
+          </p>
+
+          <div className="space-y-4">
+            {/* <button
+              onClick={() => setSurveyState(prev => ({
+                ...prev,
+                hasCompletedDailyToday: false,
+                currentQuestionIndex: 0,
+                answers: [],
+                currentAnswer: "",
+              }))}
+              className="px-8 py-4 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white rounded-xl shadow-lg transition-all duration-300 transform hover:scale-105"
+            >
+              Take Another Daily Check-in
+            </button> */}
+
+            <p className="text-sm text-gray-500 mt-4">
+              Next check-in available tomorrow
+            </p>
+          </div>
         </div>
       </div>
     );
@@ -264,6 +346,7 @@ export function App() {
                 answers: [],
                 currentAnswer: "",
                 isNewUser: surveyState.isNewUser,
+                hasCompletedDailyToday: surveyState.hasCompletedDailyToday,
                 isLoading: false,
                 isSaving: false,
                 error: null,
