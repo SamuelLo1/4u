@@ -4,6 +4,7 @@ import { saveRoom, shareRoom, composePhasedBase } from "./lib/api";
 import { Hotspots } from "./components/Hotspots";
 import { buildDefaultBoxes } from "./lib/slots";
 import { INITIAL_SURVEY_QUESTIONS, DAILY_QUESTIONS, SelectedAnswer, Question } from "./questions";
+import { generateDailyQuestions } from "./lib/api";
 
 // Hardcoded UUID for now - in production this would come from user authentication
 const USER_UUID = "123e4567-e89b-12d3-a456-426614174000";
@@ -13,6 +14,8 @@ const STORAGE_KEYS = {
   USER_ANSWERS: `user_answers_${USER_UUID}`,
   USER_STATUS: `user_status_${USER_UUID}`,
   DAILY_CHECK_IN: `daily_checkin_${USER_UUID}`,
+  DYNAMIC_QUESTIONS: `dynamic_questions_${USER_UUID}`,
+  DAILY_QUESTION_HISTORY: `daily_question_history_${USER_UUID}`,
 };
 
 // Utility function to get today's date as a string
@@ -31,6 +34,13 @@ interface SurveyState {
   error: string | null;
 }
 
+interface DynamicQuestionsState {
+  questions: Question[];
+  isLoading: boolean;
+  error: string | null;
+  generatedAt: string | null;
+}
+
 export function App() {
   const [surveyState, setSurveyState] = useState<SurveyState>({
     currentQuestionIndex: 0,
@@ -41,6 +51,13 @@ export function App() {
     isLoading: true,
     isSaving: false,
     error: null,
+  });
+
+  const [dynamicQuestionsState, setDynamicQuestionsState] = useState<DynamicQuestionsState>({
+    questions: [],
+    isLoading: false,
+    error: null,
+    generatedAt: null,
   });
 
   const { getItem, setItem, getAllKeys, clear } = useAsyncStorage();
@@ -56,6 +73,13 @@ export function App() {
   useEffect(() => {
     checkUserStatus();
   }, []);
+
+  // Generate dynamic questions for returning users
+  useEffect(() => {
+    if (surveyState.isNewUser === false && !surveyState.hasCompletedDailyToday) {
+      loadDynamicQuestions();
+    }
+  }, [surveyState.isNewUser, surveyState.hasCompletedDailyToday]);
 
   const checkUserStatus = async () => {
     try {
@@ -105,8 +129,114 @@ export function App() {
     }
   };
 
+  const loadDynamicQuestions = async () => {
+    console.log('🚀 Starting dynamic questions workflow...');
+    try {
+      setDynamicQuestionsState(prev => ({ ...prev, isLoading: true, error: null }));
+
+      console.log('📊 Checking for existing user answers...');
+      // Get user's previous answers
+      const existingAnswersJson = await getItem({ key: STORAGE_KEYS.USER_ANSWERS });
+      if (!existingAnswersJson) {
+        console.log('❌ No user answers found');
+        throw new Error('No user answers found');
+      }
+
+      const existingAnswers = JSON.parse(existingAnswersJson);
+      console.log('📝 Found existing answers:', existingAnswers);
+      
+      // Get the most recent initial survey answers for personality context
+      const initialSurvey = existingAnswers.find((entry: any) => entry.type === 'initial');
+      if (!initialSurvey || !initialSurvey.answers) {
+        console.log('⚠️ No initial survey found, using static daily questions');
+        return;
+      }
+
+      console.log('🎯 Found initial survey with', initialSurvey.answers.length, 'answers');
+      console.log('🏷️ User personality tags:', initialSurvey.answers.flatMap((a: any) => a.tags));
+
+      // Get previous daily questions to avoid repetition
+      const dailyHistoryJson = await getItem({ key: STORAGE_KEYS.DAILY_QUESTION_HISTORY });
+      const previousDailyQuestions = dailyHistoryJson ? JSON.parse(dailyHistoryJson) : [];
+      console.log('📅 Previous daily questions history:', previousDailyQuestions);
+
+      console.log('🤖 Calling OpenAI to generate dynamic questions...');
+      
+      const response = await generateDailyQuestions({
+        userAnswers: initialSurvey.answers,
+        previousDailyQuestions
+      });
+
+      console.log('✅ Dynamic questions generated successfully!');
+      console.log('📋 Generated questions:', response.questions);
+      console.log('🕒 Generated at:', response.generatedAt);
+      console.log('🏷️ User tags used:', response.userTags);
+
+      setDynamicQuestionsState({
+        questions: response.questions,
+        isLoading: false,
+        error: null,
+        generatedAt: response.generatedAt
+      });
+
+      // Store the generated questions in history
+      const updatedHistory = [
+        ...previousDailyQuestions,
+        {
+          date: getTodayDateString(),
+          questions: response.questions
+        }
+      ];
+      
+      console.log('💾 Saving dynamic questions to storage...');
+      await setItem({
+        key: STORAGE_KEYS.DYNAMIC_QUESTIONS,
+        value: JSON.stringify({
+          questions: response.questions,
+          generatedAt: response.generatedAt,
+          date: getTodayDateString()
+        })
+      });
+
+      await setItem({
+        key: STORAGE_KEYS.DAILY_QUESTION_HISTORY,
+        value: JSON.stringify(updatedHistory)
+      });
+      
+      console.log('🎉 Dynamic questions workflow completed successfully!');
+
+    } catch (error: any) {
+      console.error('❌ Failed to load dynamic questions:', error);
+      console.error('🔍 Error details:', {
+        message: error.message,
+        stack: error.stack
+      });
+      
+      setDynamicQuestionsState(prev => ({
+        ...prev,
+        isLoading: false,
+        error: error.message || 'Failed to generate questions'
+      }));
+      
+      console.log('⚡ Fallback: Will use static DAILY_QUESTIONS instead');
+    }
+  };
+
   const getCurrentQuestions = () => {
-    return surveyState.isNewUser ? INITIAL_SURVEY_QUESTIONS : DAILY_QUESTIONS;
+    if (surveyState.isNewUser) {
+      console.log('📋 Using INITIAL_SURVEY_QUESTIONS for new user');
+      return INITIAL_SURVEY_QUESTIONS;
+    }
+    
+    // For returning users, try to use dynamic questions if available
+    if (dynamicQuestionsState.questions.length > 0) {
+      console.log('🎯 Using DYNAMIC questions:', dynamicQuestionsState.questions.length, 'questions');
+      return dynamicQuestionsState.questions;
+    }
+    
+    // Fallback to static daily questions
+    console.log('📋 Using static DAILY_QUESTIONS as fallback');
+    return DAILY_QUESTIONS;
   };
 
   const personalityHint = useMemo(() => {
@@ -171,7 +301,6 @@ export function App() {
 
     const inventoryText = productTexts.length > 0 ? `\nUse items inspired by: ${productTexts.join('; ')}` : ''
     const prompt = `An isometric pixel art bedroom with 45-degree walls and a grid floor, cozy, minimalist, clean black outlines, bright saturated colors with subtle dithering. Keep layout realistic and uncluttered. Personality vibe: ${personalityHint.vibe}. Palette: ${personalityHint.palette}. Maintain isometric perspective and consistent camera angle.${inventoryText}`;
-    const negativePrompt = "blurry, extra limbs, deformed, wrong perspective, cluttered, text, watermark, logo, non-isometric, incorrect camera angle, photorealistic";
 
     try {
       // Phased feedback for UX
@@ -388,30 +517,48 @@ export function App() {
   };
 
   // Loading state
-  if (surveyState.isLoading) {
+  if (surveyState.isLoading || dynamicQuestionsState.isLoading) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center p-6">
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600 mx-auto mb-4"></div>
-          <p className="text-gray-600">Loading your experience...</p>
+          <p className="text-gray-600">
+            {dynamicQuestionsState.isLoading 
+              ? "Generating your personalized questions..."
+              : "Loading your experience..."}
+          </p>
         </div>
       </div>
     );
   }
 
   // Error state
-  if (surveyState.error && !surveyState.isSaving) {
+  if ((surveyState.error && !surveyState.isSaving) || dynamicQuestionsState.error) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-red-50 to-pink-100 flex items-center justify-center p-6">
         <div className="text-center max-w-md">
           <div className="text-6xl mb-4">⚠️</div>
           <h2 className="text-2xl font-bold text-red-800 mb-2">Oops!</h2>
-          <p className="text-red-600 mb-6">{surveyState.error}</p>
+          <p className="text-red-600 mb-6">
+            {surveyState.error || dynamicQuestionsState.error}
+          </p>
+          {dynamicQuestionsState.error && (
+            <p className="text-sm text-gray-600 mb-4">
+              Don't worry - we'll use standard questions instead.
+            </p>
+          )}
           <button
-            onClick={() => window.location.reload()}
+            onClick={() => {
+              if (dynamicQuestionsState.error) {
+                // Clear dynamic questions error and continue with static questions
+                setDynamicQuestionsState(prev => ({ ...prev, error: null }));
+              } else {
+                window.location.reload();
+              }
+            }}
             className="px-6 py-3 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors"
           >
-            Try Again
+            {dynamicQuestionsState.error ? 'Continue' : 'Try Again'}
           </button>
         </div>
       </div>

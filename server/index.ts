@@ -45,6 +45,27 @@ type ComposeRequest = {
   size?: '1024x1024' | '1536x1024' | '1024x1536'
 }
 
+type GenerateDailyQuestionsRequest = {
+  userAnswers: Array<{
+    questionId: string
+    choiceId: string
+    choiceText: string
+    tags: string[]
+  }>
+  previousDailyQuestions?: Array<{
+    date: string
+    questions: Array<{
+      id: string
+      text: string
+      choices: Array<{
+        id: string
+        text: string
+        tags: string[]
+      }>
+    }>
+  }>
+}
+
 type RoomState = {
   id: string
   seed: number
@@ -209,6 +230,180 @@ app.post('/api/rooms/:id/share', (req: Request, res: Response) => {
   if (!room) return res.status(404).json({error: 'not_found'})
   const token = room.id // simple token for dev
   res.json({shareToken: token})
+})
+
+app.post('/api/generate-daily-questions', async (req: Request, res: Response) => {
+  console.log('🚀 POST /api/generate-daily-questions - Starting request...')
+  console.log('📥 Request body:', JSON.stringify(req.body, null, 2))
+  
+  const { userAnswers, previousDailyQuestions = [] } = req.body as GenerateDailyQuestionsRequest
+  
+  if (!userAnswers || !Array.isArray(userAnswers) || userAnswers.length === 0) {
+    console.log('❌ Invalid request: userAnswers is required')
+    return res.status(400).json({ error: 'userAnswers is required' })
+  }
+  
+  console.log('✅ Validation passed. User answers count:', userAnswers.length)
+  console.log('📅 Previous daily questions count:', previousDailyQuestions.length)
+
+  try {
+    console.log('🎯 Analyzing user personality from tags...')
+    // Extract user personality from tags
+    const allTags = userAnswers.flatMap(a => a.tags)
+    console.log('🏷️ All user tags:', allTags)
+    
+    const tagCounts = allTags.reduce((acc, tag) => {
+      acc[tag] = (acc[tag] || 0) + 1
+      return acc
+    }, {} as Record<string, number>)
+    
+    console.log('📊 Tag counts:', tagCounts)
+    
+    const topTags = Object.entries(tagCounts)
+      .sort(([,a], [,b]) => b - a)
+      .slice(0, 8)
+      .map(([tag]) => tag)
+    
+    console.log('⭐ Top tags for personality:', topTags)
+
+    // Build context about user's personality and previous answers
+    const userPersonalityContext = `
+User's personality profile based on survey responses:
+- Top personality tags: ${topTags.join(', ')}
+- Full answers: ${userAnswers.map(a => `"${a.choiceText}" (tags: ${a.tags.join(', ')})`).join('; ')}
+
+Previous daily questions asked (to avoid repetition):
+${previousDailyQuestions.map(day => 
+  `- ${day.date}: ${day.questions.map(q => q.text).join('; ')}`
+).join('\n')}
+    `.trim()
+
+    console.log('🤖 Preparing OpenAI prompt...')
+    // Generate dynamic questions using OpenAI
+    const prompt = `You are creating personalized daily check-in questions for a user based on their personality profile. 
+
+${userPersonalityContext}
+
+Create exactly 3 new daily check-in questions that:
+1. Are personalized to the user's personality tags and previous choices
+2. Are different from any previously asked questions
+3. Help understand their current mood/priorities/interests
+4. Each question should have 2-4 multiple choice options
+5. Each choice should include relevant personality tags for design recommendations
+
+Return ONLY a JSON object with this exact structure:
+{
+  "questions": [
+    {
+      "id": "unique_question_id",
+      "text": "Question text?",
+      "choices": [
+        {
+          "id": "unique_choice_id",
+          "text": "Choice text",
+          "tags": ["tag1", "tag2"]
+        }
+      ]
+    }
+  ]
+}
+
+Make the questions feel fresh, engaging, and relevant to their personality. Focus on current mood, daily priorities, or design preferences that would help create their ideal room.`
+
+    console.log('📝 Full prompt sent to OpenAI:')
+    console.log('=====================================') 
+    console.log(prompt)
+    console.log('=====================================') 
+    
+    console.log('🔄 Calling OpenAI API...')
+    const response = await openai.chat.completions.create({
+      model: 'gpt-4o',
+      messages: [
+        {
+          role: 'system',
+          content: 'You are an expert at creating personalized survey questions. Always respond with valid JSON only.'
+        },
+        {
+          role: 'user',
+          content: prompt
+        }
+      ],
+      temperature: 0.8,
+      max_tokens: 1500
+    })
+    
+    console.log('✅ OpenAI API call completed')
+
+    const content = response.choices[0]?.message?.content?.trim()
+    console.log('📤 OpenAI response content:')
+    console.log('=====================================') 
+    console.log(content)
+    console.log('=====================================') 
+    
+    if (!content) {
+      console.log('❌ No content received from OpenAI')
+      return res.status(500).json({ error: 'no_response_from_openai' })
+    }
+
+    try {
+      console.log('🔄 Parsing OpenAI response as JSON...')
+      
+      // Clean the content - remove markdown code blocks if present
+      let cleanContent = content
+      if (content.startsWith('```json') && content.endsWith('```')) {
+        cleanContent = content.slice(7, -3).trim()
+        console.log('🧹 Removed markdown code blocks from response')
+      } else if (content.startsWith('```') && content.endsWith('```')) {
+        cleanContent = content.slice(3, -3).trim()
+        console.log('🧹 Removed markdown code blocks from response')
+      }
+      
+      console.log('✨ Clean content to parse:')
+      console.log('=====================================') 
+      console.log(cleanContent)
+      console.log('=====================================') 
+      
+      const generatedQuestions = JSON.parse(cleanContent)
+      
+      // Validate the structure
+      if (!generatedQuestions.questions || !Array.isArray(generatedQuestions.questions)) {
+        console.log('❌ Invalid response structure from OpenAI')
+        throw new Error('Invalid response structure')
+      }
+      
+      console.log('✅ Successfully parsed', generatedQuestions.questions.length, 'questions')
+      console.log('📝 Generated questions:', generatedQuestions.questions.map((q: any) => q.text))
+
+      // Add timestamp for tracking
+      const result = {
+        ...generatedQuestions,
+        generatedAt: new Date().toISOString(),
+        userTags: topTags
+      }
+      
+      console.log('🎉 Sending successful response to client')
+      res.json(result)
+    } catch (parseError) {
+      console.error('❌ Failed to parse OpenAI response as JSON:', parseError)
+      console.error('📄 Raw OpenAI response that failed to parse:', content)
+      return res.status(500).json({ 
+        error: 'invalid_ai_response', 
+        message: 'Failed to parse AI response',
+        rawResponse: content
+      })
+    }
+
+  } catch (error: any) {
+    console.error('💥 Error generating daily questions:', error)
+    console.error('🔍 Error stack:', error.stack)
+    res.status(500).json({ 
+      error: 'generation_failed', 
+      message: error?.message || 'Unknown error'
+    })
+  }
+  
+  console.log('🏁 /api/generate-daily-questions request completed')
+
 })
 
 // Plan C: generate base room then compose stylized sprites server-side
