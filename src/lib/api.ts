@@ -130,3 +130,47 @@ export async function composePhasedFinalize(baseB64: string, spriteB64s: string[
   return (await resp.json()) as {imageUrl: string}
 }
 
+export async function generateDailyQuestions(params: {
+  userAnswers: Array<{
+    questionId: string
+    choiceId: string
+    choiceText: string
+    tags: string[]
+  }>
+  previousDailyQuestions?: Array<{
+    date: string
+    questions: Array<{
+      id: string
+      text: string
+      choices: Array<{
+        id: string
+        text: string
+        tags: string[]
+      }>
+    }>
+  }>
+}) {
+  const resp = await fetch(`${API_BASE}/api/generate-daily-questions`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(params),
+  })
+  if (!resp.ok) {
+    const error = await resp.json().catch(() => ({}))
+    throw new Error(error.message || 'Failed to generate daily questions')
+  }
+  return (await resp.json()) as {
+    questions: Array<{
+      id: string
+      text: string
+      choices: Array<{
+        id: string
+        text: string
+        tags: string[]
+      }>
+    }>
+    generatedAt: string
+    userTags: string[]
+  }
+}
+
