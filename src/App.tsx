@@ -17,13 +17,17 @@ interface SurveyState {
   currentQuestionIndex: number
   answers: string[]
   currentAnswer: string
+  showFeaturedItems: boolean
+  showSharePage: boolean
 }
 
 export function App() {
   const [surveyState, setSurveyState] = useState<SurveyState>({
     currentQuestionIndex: 0,
     answers: [],
-    currentAnswer: ''
+    currentAnswer: '',
+    showFeaturedItems: false,
+    showSharePage: false
   })
 
   const answeredCount = surveyState.answers.length
@@ -63,7 +67,7 @@ export function App() {
         textColor: 'text-orange-900',
         buttonStyle: 'bg-gradient-to-r from-yellow-500 to-orange-600 hover:from-yellow-600 hover:to-orange-700 text-white rounded-full shadow-xl transform hover:scale-110 transition-all duration-500 animate-pulse',
         fontFamily: 'font-bold tracking-wide',
-        animation: 'animate-spin',
+        animation: 'animate-spin',  // TODO: remove spin animation
         questionSize: 'text-4xl font-extrabold',
         containerStyle: 'p-12 border-8 border-orange-400 rounded-full shadow-2xl'
       },
@@ -90,7 +94,9 @@ export function App() {
       setSurveyState(prev => ({
         currentQuestionIndex: prev.currentQuestionIndex + 1,
         answers: [...prev.answers, prev.currentAnswer],
-        currentAnswer: ''
+        currentAnswer: '',
+        showFeaturedItems: prev.showFeaturedItems,
+        showSharePage: prev.showSharePage
       }))
     }
   }
@@ -99,12 +105,188 @@ export function App() {
     setSurveyState(prev => ({
       currentQuestionIndex: prev.currentQuestionIndex + 1,
       answers: [...prev.answers, ''],
-      currentAnswer: ''
+      currentAnswer: '',
+      showFeaturedItems: prev.showFeaturedItems,
+      showSharePage: prev.showSharePage
     }))
   }
 
   const styles = getEvolutionStyles()
   const isComplete = surveyState.currentQuestionIndex >= SURVEY_QUESTIONS.length
+
+  // Helper function to copy text to clipboard
+  const copyToClipboard = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text)
+      alert('Link copied to clipboard!')
+    } catch (err) {
+      console.error('Failed to copy: ', err)
+      alert('Failed to copy link')
+    }
+  }
+
+  // Share page view
+  if (surveyState.showSharePage) {
+    const shareText = "I just completed an amazing evolving survey experience! Check it out:"
+    const shareUrl = window.location.href
+    const fullShareText = `${shareText} ${shareUrl}`
+
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 py-8">
+        <div className="max-w-2xl mx-auto px-4">
+          <div className="text-center mb-8">
+            <h1 className="text-4xl font-bold text-indigo-900 mb-4">Share Your Experience! 🌟</h1>
+            <p className="text-lg text-indigo-700 mb-8">
+              Help others discover this unique journey that evolves as you share your story.
+            </p>
+            
+            {/* Share Options */}
+            <div className="space-y-4">
+              {/* Copy Link */}
+              <div className="bg-white rounded-lg p-6 shadow-md">
+                <h3 className="text-xl font-semibold mb-3 text-gray-800">Copy Link</h3>
+                <div className="flex items-center space-x-3">
+                  <input 
+                    type="text" 
+                    value={shareUrl}
+                    readOnly
+                    className="flex-1 p-3 border border-gray-300 rounded-lg bg-gray-50 text-sm"
+                  />
+                  <button 
+                    onClick={() => copyToClipboard(shareUrl)}
+                    className="px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg transition-colors duration-300"
+                  >
+                    Copy
+                  </button>
+                </div>
+              </div>
+
+              {/* Instagram Share */}
+              <div className="bg-white rounded-lg p-6 shadow-md">
+                <h3 className="text-xl font-semibold mb-3 text-gray-800">Share on Instagram</h3>
+                <p className="text-gray-600 text-sm mb-4">Copy this text and share it in your Instagram story or post:</p>
+                <div className="bg-gray-50 p-4 rounded-lg mb-4">
+                  <p className="text-sm text-gray-700">{fullShareText}</p>
+                </div>
+                <button 
+                  onClick={() => copyToClipboard(fullShareText)}
+                  className="px-6 py-3 bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 text-white rounded-lg transition-all duration-300"
+                >
+                  Copy for Instagram
+                </button>
+              </div>
+
+              {/* Twitter/X Share */}
+              <div className="bg-white rounded-lg p-6 shadow-md">
+                <h3 className="text-xl font-semibold mb-3 text-gray-800">Share on X (Twitter)</h3>
+                <p className="text-gray-600 text-sm mb-4">Click to share directly on X:</p>
+                <a 
+                  href={`https://twitter.com/intent/tweet?text=${encodeURIComponent(fullShareText)}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-block px-6 py-3 bg-black hover:bg-gray-800 text-white rounded-lg transition-colors duration-300"
+                >
+                  Share on X
+                </a>
+              </div>
+            </div>
+
+            {/* Navigation Buttons */}
+            <div className="flex justify-center space-x-4 mt-8">
+              <button 
+                onClick={() => setSurveyState(prev => ({ ...prev, showSharePage: false, showFeaturedItems: true }))}
+                className="px-6 py-3 bg-gray-600 hover:bg-gray-700 text-white rounded-lg transition-colors duration-300"
+              >
+                ← Back to Items
+              </button>
+              <button 
+                onClick={() => setSurveyState({ currentQuestionIndex: 0, answers: [], currentAnswer: '', showFeaturedItems: false, showSharePage: false })}
+                className="px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg transition-colors duration-300"
+              >
+                Start Over
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // Featured Items View
+  if (surveyState.showFeaturedItems) {
+    return (
+      <div className="min-h-screen bg-gray-50 py-8">
+        <div className="max-w-6xl mx-auto px-4">
+          <div className="text-center mb-8">
+            <h1 className="text-3xl font-bold mb-8">Featured Items</h1>
+            
+            {/* Catalog Grid */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
+              {/* Item 1 */}
+              <div className="bg-white rounded-lg shadow-md p-6 hover:shadow-lg transition-shadow duration-300">
+                <div className="w-full h-48 bg-gray-200 rounded-lg mb-4 flex items-center justify-center">
+                  <span className="text-gray-500">Image Placeholder</span>
+                </div>
+                <h3 className="text-xl font-semibold mb-2">Wireless Headphones</h3>
+                <p className="text-gray-600 text-sm">Premium noise-cancelling wireless headphones with 30-hour battery life and superior sound quality.</p>
+              </div>
+
+              {/* Item 2 */}
+              <div className="bg-white rounded-lg shadow-md p-6 hover:shadow-lg transition-shadow duration-300">
+                <div className="w-full h-48 bg-gray-200 rounded-lg mb-4 flex items-center justify-center">
+                  <span className="text-gray-500">Image Placeholder</span>
+                </div>
+                <h3 className="text-xl font-semibold mb-2">Smart Watch</h3>
+                <p className="text-gray-600 text-sm">Advanced fitness tracking smartwatch with heart rate monitor, GPS, and waterproof design.</p>
+              </div>
+
+              {/* Item 3 */}
+              <div className="bg-white rounded-lg shadow-md p-6 hover:shadow-lg transition-shadow duration-300">
+                <div className="w-full h-48 bg-gray-200 rounded-lg mb-4 flex items-center justify-center">
+                  <span className="text-gray-500">Image Placeholder</span>
+                </div>
+                <h3 className="text-xl font-semibold mb-2">Laptop Backpack</h3>
+                <p className="text-gray-600 text-sm">Durable and stylish laptop backpack with multiple compartments and ergonomic design.</p>
+              </div>
+
+              {/* Item 4 */}
+              <div className="bg-white rounded-lg shadow-md p-6 hover:shadow-lg transition-shadow duration-300">
+                <div className="w-full h-48 bg-gray-200 rounded-lg mb-4 flex items-center justify-center">
+                  <span className="text-gray-500">Image Placeholder</span>
+                </div>
+                <h3 className="text-xl font-semibold mb-2">Portable Speaker</h3>
+                <p className="text-gray-600 text-sm">Compact Bluetooth speaker with 360-degree sound, waterproof rating, and 12-hour playtime.</p>
+              </div>
+
+              {/* Item 5 */}
+              <div className="bg-white rounded-lg shadow-md p-6 hover:shadow-lg transition-shadow duration-300">
+                <div className="w-full h-48 bg-gray-200 rounded-lg mb-4 flex items-center justify-center">
+                  <span className="text-gray-500">Image Placeholder</span>
+                </div>
+                <h3 className="text-xl font-semibold mb-2">Coffee Maker</h3>
+                <p className="text-gray-600 text-sm">Programmable drip coffee maker with thermal carafe and automatic shut-off feature.</p>
+              </div>
+            </div>
+
+            <div className="flex justify-center space-x-4">
+              <button 
+                onClick={() => setSurveyState(prev => ({ ...prev, showFeaturedItems: false }))}
+                className="px-6 py-3 bg-gray-600 hover:bg-gray-700 text-white rounded-lg transition-colors duration-300"
+              >
+                ← Back
+              </button>
+              <button 
+                onClick={() => setSurveyState(prev => ({ ...prev, showFeaturedItems: false, showSharePage: true }))}
+                className="px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg transition-colors duration-300"
+              >
+                Next →
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   if (isComplete) {
     return (
@@ -116,12 +298,20 @@ export function App() {
           <p className={`text-lg ${styles.textColor} mb-6`}>
             You've answered {answeredCount} questions and watched this experience evolve with you.
           </p>
-          <button 
-            onClick={() => setSurveyState({ currentQuestionIndex: 0, answers: [], currentAnswer: '' })}
-            className={`px-8 py-4 ${styles.buttonStyle} ${styles.fontFamily}`}
-          >
-            Start Over
-          </button>
+          <div className="flex justify-center space-x-4">
+            <button 
+              onClick={() => setSurveyState({ currentQuestionIndex: 0, answers: [], currentAnswer: '', showFeaturedItems: false, showSharePage: false })}
+              className={`px-8 py-4 ${styles.buttonStyle} ${styles.fontFamily}`}
+            >
+              Start Over
+            </button>
+            <button 
+              onClick={() => setSurveyState(prev => ({ ...prev, showFeaturedItems: true }))}
+              className={`px-8 py-4 bg-gray-600 hover:bg-gray-700 text-white rounded-lg ${styles.fontFamily} transition-colors duration-300`}
+            >
+              Next
+            </button>
+          </div>
         </div>
       </div>
     )
