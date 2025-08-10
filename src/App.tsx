@@ -345,7 +345,7 @@ export function App() {
     setSurveyState((prev) => ({ ...prev, selectedChoiceId: choiceId }));
   };
 
-  const handleSubmitAnswer = () => {
+  const handleSubmitAnswer = async () => {
     if (surveyState.selectedChoiceId) {
       const questions = getCurrentQuestions();
       const currentQuestion = questions[surveyState.currentQuestionIndex];
@@ -361,12 +361,26 @@ export function App() {
           tags: selectedChoice.tags,
         };
 
+        const newAnswers = [...surveyState.answers, answer];
+        const isLastQuestion = surveyState.currentQuestionIndex + 1 >= questions.length;
+        
+        console.log('📝 Answer submitted. Is last question:', isLastQuestion);
+        
         setSurveyState((prev) => ({
           ...prev,
-          answers: [...prev.answers, answer],
+          answers: newAnswers,
           selectedChoiceId: null,
           currentQuestionIndex: prev.currentQuestionIndex + 1,
         }));
+        
+        // Auto-save after the last question
+        if (isLastQuestion) {
+          console.log('🎯 Last question completed - auto-saving answers...');
+          // Use setTimeout to ensure state update completes first, then auto-save
+          setTimeout(() => {
+            saveAnswersToLocalStorage(newAnswers);
+          }, 50);
+        }
       }
     }
   };
@@ -379,14 +393,16 @@ export function App() {
     }));
   };
 
-  const saveAnswersToLocalStorage = async () => {
+  const saveAnswersToLocalStorage = async (answersOverride?: SelectedAnswer[]) => {
     try {
       setSurveyState((prev) => ({ ...prev, isSaving: true, error: null }));
 
-      // All answers are valid (no need to filter for empty text answers)
-      const answersToSave = surveyState.answers;
+      // Use override answers if provided (for auto-save), otherwise use current state
+      const answersToSave = answersOverride || surveyState.answers;
+      console.log('💾 Saving answers to storage:', answersToSave.length, 'answers');
 
       if (answersToSave.length === 0) {
+        console.log('⚠️ No answers to save');
         setSurveyState((prev) => ({
           ...prev,
           isSaving: false,
@@ -471,6 +487,7 @@ export function App() {
         isLoading: true,
         isSaving: false,
         error: null,
+        showProductPage: false,
       });
       // Re-check user status
       checkUserStatus();
@@ -683,7 +700,7 @@ export function App() {
               setSurveyState({
                 currentQuestionIndex: 0,
                 answers: [],
-                currentAnswer: "",
+                selectedChoiceId: null,
                 isNewUser: surveyState.isNewUser,
                 hasCompletedDailyToday: surveyState.hasCompletedDailyToday,
                 isLoading: false,
@@ -711,26 +728,21 @@ export function App() {
               ? "Welcome aboard! 🎉"
               : "Thanks for checking in! 🌟"}
           </h1>
-          <p className="text-lg text-gray-700 mb-8">
+          <p className="text-lg text-gray-700 mb-4">
             You answered {answeredCount} out of {questions.length} questions.
+          </p>
+          <p className="text-sm text-green-600 mb-8">
+            ✅ Your answers have been automatically saved!
           </p>
 
           {answeredCount > 0 && (
             <div className="space-y-4">
-              <button
-                onClick={saveAnswersToLocalStorage}
-                disabled={surveyState.isSaving}
-                className="px-8 py-4 bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 text-white rounded-xl shadow-lg transition-all duration-300 transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
-              >
-                {surveyState.isSaving ? (
-                  <span className="flex items-center justify-center">
-                    <span className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-3"></span>
-                    Saving...
-                  </span>
-                ) : (
-                  "Save My Answers"
-                )}
-              </button>
+              {surveyState.isSaving && (
+                <div className="flex items-center justify-center mb-4">
+                  <span className="animate-spin rounded-full h-5 w-5 border-b-2 border-green-600 mr-3"></span>
+                  <span className="text-green-700">Saving your answers...</span>
+                </div>
+              )}
 
               <button
                 onClick={() => setSurveyState(prev => ({ ...prev, showProductPage: true }))}
