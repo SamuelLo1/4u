@@ -1,5 +1,8 @@
-import React, { useState } from 'react'
-import { getAIResponse } from './AI_utils/AI_get_questions'
+import React, { useMemo, useState } from 'react'
+import {usePopularProducts} from '@shopify/shop-minis-react'
+import {generateRoom, saveRoom, shareRoom} from './lib/api'
+import {Hotspots} from './components/Hotspots'
+import {buildDefaultBoxes} from './lib/slots'
 
 const SURVEY_QUESTIONS = [
   "What's your biggest dream right now?",
@@ -21,11 +24,16 @@ interface SurveyState {
 }
 
 export function App() {
+  const {products} = usePopularProducts()
   const [surveyState, setSurveyState] = useState<SurveyState>({
     currentQuestionIndex: 0,
     answers: [],
     currentAnswer: ''
   })
+  const [isGenerating, setIsGenerating] = useState(false)
+  const [generatedImageUrl, setGeneratedImageUrl] = useState<string | null>(null)
+  const [generationError, setGenerationError] = useState<string | null>(null)
+  const [lastRoomId, setLastRoomId] = useState<string | null>(null)
 
   const answeredCount = surveyState.answers.length
   const evolutionStage = Math.min(Math.floor(answeredCount / 2), 4)
@@ -109,6 +117,80 @@ export function App() {
   const styles = getEvolutionStyles()
   const isComplete = surveyState.currentQuestionIndex >= SURVEY_QUESTIONS.length
 
+  const personalityHint = useMemo(() => {
+    // Very naive placeholder mapping from answers to a vibe/palette. Replace with real scoring later.
+    const joined = surveyState.answers.join(' ').toLowerCase()
+    if (joined.includes('ocean') || joined.includes('calm')) return {vibe: 'calm coastal', palette: 'soft blues and sandy neutrals'}
+    if (joined.includes('city') || joined.includes('tech')) return {vibe: 'modern tech', palette: 'cool grays with neon accents'}
+    if (joined.includes('nature') || joined.includes('forest')) return {vibe: 'nature-inspired', palette: 'greens, wood tones, warm whites'}
+    return {vibe: 'cozy minimalist', palette: 'warm neutrals with gentle contrast'}
+  }, [surveyState.answers])
+
+  const productImageUrls = useMemo(() => {
+    const forceBaselines = (import.meta as any)?.env?.VITE_FORCE_BASELINES === 'true'
+    const baselines = [
+      'https://www.ikea.com/us/en/images/products/malm-bed-frame-dark-brown-veneer__1364772_pe956028_s5.jpg?f=xl',
+      'https://www.ikea.com/us/en/images/products/lagkapten-alex-desk-gray-wood-effect__1432287_pe982743_s5.jpg?f=xl',
+      'https://tennisexpress.com/cdn/shop/collections/Collection-Image-racquets_a8e2e423-79ad-44a3-a9ca-8a632e5969f5.jpg?v=1746049052',
+      'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRugJ31V4d7YSlKrT1t7ZKvmGRria8c0HfP8A&s',
+      'https://m.media-amazon.com/images/I/61xxhaeUKIL._UF894,1000_QL80_.jpg',
+    ]
+    if (forceBaselines) return baselines
+    const urls = (products ?? [])
+      .map((p: any) => p?.featuredImage?.url || p?.images?.[0]?.url)
+      .filter((u: any) => typeof u === 'string')
+      .slice(0, 6)
+
+    if (urls.length > 0) return urls as string[]
+    return baselines
+  }, [products])
+
+  const handleGenerate = async () => {
+    setIsGenerating(true)
+    setGenerationError(null)
+    setGeneratedImageUrl(null)
+
+    const prompt = `An isometric pixel art bedroom with 45-degree walls and a grid floor, cozy, minimalist, clean black outlines, bright saturated colors with subtle dithering. Keep layout realistic and uncluttered. Personality vibe: ${personalityHint.vibe}. Palette: ${personalityHint.palette}. Include a bed, desk with laptop, wall art frame, rug, floor lamp, plant, nightstand. Maintain isometric perspective and consistent camera angle.`
+    const negativePrompt = 'blurry, extra limbs, deformed, wrong perspective, cluttered, text, watermark, logo, non-isometric, incorrect camera angle, photorealistic'
+
+    try {
+      // Simple mobile-friendly 512x512 normalized boxes: x,y,w,h ∈ [0,1]
+      const boxes = buildDefaultBoxes()
+      const {imageUrl, seed = Math.floor(Math.random()*1e7)} = await generateRoom({
+        prompt,
+        negativePrompt,
+        imageUrls: productImageUrls,
+        boxes,
+        // Use OpenAI by default on server via env; optionally pass here: model: 'openai:gpt-image-1'
+      })
+      setGeneratedImageUrl(imageUrl ?? null)
+      if (imageUrl) {
+        const {roomId} = await saveRoom({seed, imageUrl, boxes})
+        setLastRoomId(roomId)
+      }
+    } catch (err: any) {
+      setGenerationError(err?.message ?? 'Failed to generate room')
+    } finally {
+      setIsGenerating(false)
+    }
+  }
+
+  const handleShare = async () => {
+    if (!lastRoomId) return
+    try {
+      const {shareToken} = await shareRoom(lastRoomId)
+      const url = new URL(window.location.href)
+      url.searchParams.set('t', shareToken)
+      if (navigator.share) {
+        await navigator.share({title: 'My Room', url: url.toString()})
+      }
+      // Fallback: copy to clipboard
+      await navigator.clipboard?.writeText(url.toString())
+    } catch (e) {
+      console.error(e)
+    }
+  }
+
   if (isComplete) {
     return (
       <div className={`min-h-screen bg-gradient-to-br ${styles.backgroundColor} flex items-center justify-center ${styles.containerStyle}`}>
@@ -119,12 +201,41 @@ export function App() {
           <p className={`text-lg ${styles.textColor} mb-6`}>
             You've answered {answeredCount} questions and watched this experience evolve with you.
           </p>
-          <button 
-            onClick={() => setSurveyState({ currentQuestionIndex: 0, answers: [], currentAnswer: '' })}
-            className={`px-8 py-4 ${styles.buttonStyle} ${styles.fontFamily}`}
-          >
-            Start Over
-          </button>
+          <div className="flex items-center justify-center gap-3 mb-6">
+            <button
+              onClick={handleGenerate}
+              disabled={isGenerating}
+              className={`px-6 py-3 ${styles.buttonStyle} ${styles.fontFamily} disabled:opacity-50`}
+            >
+              {isGenerating ? 'Generating…' : 'Generate My Room'}
+            </button>
+            <button
+              onClick={() => setSurveyState({ currentQuestionIndex: 0, answers: [], currentAnswer: '' })}
+              className={`px-6 py-3 border-2 rounded-lg ${styles.textColor} border-current ${styles.fontFamily}`}
+            >
+              Start Over
+            </button>
+          </div>
+
+          {generationError && (
+            <p className={`text-sm ${styles.textColor} opacity-70 mb-4`}>{generationError}</p>
+          )}
+
+          {generatedImageUrl && (
+            <div className="mx-auto max-w-md">
+              <div className="relative">
+                <img src={generatedImageUrl} alt="Generated room" className="w-full rounded-xl shadow-lg" />
+                <div className="absolute inset-0">
+                  <Hotspots boxes={buildDefaultBoxes()} />
+                </div>
+              </div>
+              <div className="mt-4 flex justify-center">
+                <button onClick={handleShare} className={`px-6 py-3 ${styles.buttonStyle} ${styles.fontFamily}`}>
+                  Share Room
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     )
