@@ -70,6 +70,8 @@ export function App() {
   const [generationError, setGenerationError] = useState<string | null>(null);
   const [lastRoomId, setLastRoomId] = useState<string | null>(null);
   const [generationPhase, setGenerationPhase] = useState<string | null>(null);
+  const [totalAnsweredCount, setTotalAnsweredCount] = useState(0);
+  const [bothSurveysCompleted, setBothSurveysCompleted] = useState(false);
   const [llmProfile, setLlmProfile] = useState<{vibe: string; palette: string[]; products: string[]} | null>(null);
 
   // Check if user is new or recurring on component mount
@@ -104,7 +106,7 @@ export function App() {
           const result = await getPersonalityAndProductsFromAnswers(answers as any);
           const vibe = result.personality?.vibe || '';
           const paletteArr = (result.personality?.palette || []).slice(0, 3);
-          const queries = (result.products || []).map(p => p.searchQuery).slice(0, 6);
+          const queries = (result.products || []).map(p => p.searchQuery).slice(0, 10);
           setLlmProfile({ vibe, palette: paletteArr, products: queries });
         }
       } catch (e) {
@@ -271,6 +273,24 @@ export function App() {
     return DAILY_QUESTIONS;
   };
 
+  // Check if both welcome and daily surveys have been completed
+  const hasBothSurveysCompleted = async () => {
+    try {
+      const existingAnswersJson = await getItem({ key: STORAGE_KEYS.USER_ANSWERS });
+      if (!existingAnswersJson) return false;
+      
+      const existingAnswers = JSON.parse(existingAnswersJson);
+      const hasInitialSurvey = existingAnswers.some((entry: any) => entry.type === 'initial');
+      const hasDailySurvey = existingAnswers.some((entry: any) => entry.type === 'daily');
+      
+      console.log('🔍 Survey completion check:', { hasInitialSurvey, hasDailySurvey });
+      return hasInitialSurvey && hasDailySurvey;
+    } catch (error) {
+      console.error('Error checking survey completion:', error);
+      return false;
+    }
+  };
+
   const personalityHint = useMemo(() => {
     if (llmProfile) {
       return { vibe: llmProfile.vibe, palette: llmProfile.palette.join(', ') }
@@ -279,10 +299,10 @@ export function App() {
     return { vibe: '', palette: '' }
   }, [llmProfile])
 
-  // Build text queries from LLM profile only, always length 6 to keep hooks stable
+  // Build text queries from LLM profile only, always length 10 to keep hooks stable
   const productQueries = useMemo(() => {
-    const arr = (llmProfile?.products || []).slice(0, 6)
-    while (arr.length < 6) arr.push('')
+    const arr = (llmProfile?.products || []).slice(0, 10)
+    while (arr.length < 10) arr.push('')
     return arr
   }, [llmProfile])
 
@@ -293,7 +313,11 @@ export function App() {
   const s3 = useProductSearch({ query: productQueries[3], first: 10 })
   const s4 = useProductSearch({ query: productQueries[4], first: 10 })
   const s5 = useProductSearch({ query: productQueries[5], first: 10 })
-  const searches = [s0, s1, s2, s3, s4, s5]
+  const s6 = useProductSearch({ query: productQueries[6], first: 10 })
+  const s7 = useProductSearch({ query: productQueries[7], first: 10 })
+  const s8 = useProductSearch({ query: productQueries[8], first: 10 })
+  const s9 = useProductSearch({ query: productQueries[9], first: 10 })
+  const searches = [s0, s1, s2, s3, s4, s5, s6, s7, s8, s9]
   // Removed productTexts aggregation; we now rely solely on LLM-provided queries
 
   const handleGenerateRoom = async () => {
@@ -320,7 +344,7 @@ export function App() {
       console.log('[Generate] LLM products', result?.products)
       const vibe = result.personality?.vibe || ''
       const paletteArr = (result.personality?.palette || []).slice(0,3)
-      const queries = (result.products || []).map(p => p.searchQuery).slice(0,6)
+      const queries = (result.products || []).map(p => p.searchQuery).slice(0,10)
       latestQueries = queries
       llmVibeForPrompt = vibe
       llmPaletteArrForPrompt = paletteArr
@@ -387,7 +411,7 @@ export function App() {
     setSurveyState((prev) => ({ ...prev, selectedChoiceId: choiceId }));
   };
 
-  const handleSubmitAnswer = () => {
+  const handleSubmitAnswer = async () => {
     if (surveyState.selectedChoiceId) {
       const questions = getCurrentQuestions();
       const currentQuestion = questions[surveyState.currentQuestionIndex];
@@ -403,12 +427,26 @@ export function App() {
           tags: selectedChoice.tags,
         };
 
+        const newAnswers = [...surveyState.answers, answer];
+        const isLastQuestion = surveyState.currentQuestionIndex + 1 >= questions.length;
+        
+        console.log('📝 Answer submitted. Is last question:', isLastQuestion);
+        
         setSurveyState((prev) => ({
           ...prev,
-          answers: [...prev.answers, answer],
+          answers: newAnswers,
           selectedChoiceId: null,
           currentQuestionIndex: prev.currentQuestionIndex + 1,
         }));
+        
+        // Auto-save after the last question
+        if (isLastQuestion) {
+          console.log('🎯 Last question completed - auto-saving answers...');
+          // Use setTimeout to ensure state update completes first, then auto-save
+          setTimeout(() => {
+            saveAnswersToLocalStorage(newAnswers);
+          }, 50);
+        }
       }
     }
   };
@@ -421,14 +459,39 @@ export function App() {
     }));
   };
 
-  const saveAnswersToLocalStorage = async () => {
+  useEffect(() => {
+    loadTotalAnsweredCount();
+  }, []);
+
+  const loadTotalAnsweredCount = async () => {
+    try {
+      const existingAnswersJson = await getItem({ key: STORAGE_KEYS.USER_ANSWERS });
+      if (existingAnswersJson) {
+        const existingAnswers = JSON.parse(existingAnswersJson);
+        // Count all previous answers
+        const totalCount = existingAnswers.reduce((count: number, entry: any) => {
+          return count + (entry.answers?.length || 0);
+        }, 0);
+        setTotalAnsweredCount(totalCount);
+      }
+    } catch (error) {
+      console.error('Error loading total answered count:', error);
+    }
+  };
+
+  const answeredCount = surveyState.answers.length; // Current session answers
+  const displayAnsweredCount = totalAnsweredCount + answeredCount; // Total including previous sessions
+
+  const saveAnswersToLocalStorage = async (answersOverride?: SelectedAnswer[]) => {
     try {
       setSurveyState((prev) => ({ ...prev, isSaving: true, error: null }));
 
-      // All answers are valid (no need to filter for empty text answers)
-      const answersToSave = surveyState.answers;
+      // Use override answers if provided (for auto-save), otherwise use current state
+      const answersToSave = answersOverride || surveyState.answers;
+      console.log('💾 Saving answers to storage:', answersToSave.length, 'answers');
 
       if (answersToSave.length === 0) {
+        console.log('⚠️ No answers to save');
         setSurveyState((prev) => ({
           ...prev,
           isSaving: false,
@@ -477,6 +540,10 @@ export function App() {
         });
       }
 
+      // Update survey completion status
+      const completed = await hasBothSurveysCompleted();
+      setBothSurveysCompleted(completed);
+
       // Reset the survey state after successful save
       setSurveyState({
         currentQuestionIndex: 0,
@@ -487,7 +554,7 @@ export function App() {
         isLoading: false,
         isSaving: false,
         error: null,
-        showProductPage: true, // Show the product page after saving answers
+        showProductPage: false, // Don't automatically show products page
       });
     } catch (error) {
       console.error("Error saving answers:", error);
@@ -498,6 +565,41 @@ export function App() {
       }));
     }
   };
+
+  if (surveyState.showProductPage) {
+    const productCards = searches.slice(0, 10).map(search => {
+      const products = (search as any)?.products as any[] | null;
+      return products && products.length > 0 ? products[0] : null;
+    }).filter(Boolean);
+
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-purple-50 to-pink-100 flex items-center justify-center p-6">
+        <div className="text-center max-w-4xl">
+          <h1 className="text-4xl font-bold text-purple-800 mb-6">
+            Recommended Products 🛍️
+          </h1>
+          <p className="text-lg text-gray-700 mb-8">
+            Based on your personality, here are some products you might love:
+          </p>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
+            {productCards.map((product, index) => (
+              <div key={index} className="bg-white rounded-xl shadow-lg p-4">
+                <ProductLink product={product} />
+              </div>
+            ))}
+          </div>
+
+          <button 
+            onClick={() => setSurveyState(prev => ({ ...prev, showProductPage: false }))}
+            className="px-8 py-4 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white rounded-xl shadow-lg transition-all duration-300 transform hover:scale-105"
+          >
+            Back to Home
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   const clearUserSession = async () => {
     try {
@@ -536,7 +638,7 @@ export function App() {
       const userStatus = await getItem({ key: STORAGE_KEYS.USER_STATUS });
       const dailyCheckIn = await getItem({ key: STORAGE_KEYS.DAILY_CHECK_IN });
       
-      console.log('📝 User Answers:', userAnswers ? JSON.parse(userAnswers) : null);
+      console.log('📋 User Answers:', userAnswers ? JSON.parse(userAnswers) : null);
       console.log('👤 User Status:', userStatus);
       console.log('📅 Daily Check-in:', dailyCheckIn ? JSON.parse(dailyCheckIn) : null);
       
@@ -611,94 +713,101 @@ export function App() {
     );
   }
 
+
+  
   // Show home page if returning user has already completed daily check-in today
   if (!surveyState.isNewUser && surveyState.hasCompletedDailyToday) {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-emerald-50 to-teal-100 flex items-center justify-center p-6">
-        <div className="text-center max-w-2xl">
-          <div className="text-6xl mb-6">✨</div>
-          <h1 className="text-4xl font-bold text-emerald-800 mb-6">
-            Welcome back! 🌟
-          </h1>
-          <p className="text-lg text-gray-700 mb-8">
-            You've already completed your daily check-in today. Come back
-            tomorrow for new reflection questions!
-          </p>
-
-          <div className="space-y-4">
+  return (
+    
+    <div className="min-h-screen bg-gradient-to-br from-emerald-50 to-teal-100 flex items-center justify-center p-6 ">
+      <div className="text-center max-w-2xl">
+        <div className="text-6xl mb-6">✨</div>
+        <h1 className="text-4xl font-bold text-emerald-800 mb-6">
+          Welcome back! 🌟
+        </h1>
+        <p className="text-lg text-gray-700 mb-8">
+          You've already completed your daily check-in today. Come back
+          tomorrow for new reflection questions!
+        </p>
+        <p className="text-lg text-gray-700 mb-8">
+          {!surveyState.isNewUser && totalAnsweredCount > 0 && (
+            <span className="block text-sm text-gray-600 mt-2">
+              Total questions answered: {displayAnsweredCount}
+            </span>
+          )}
+        </p>
+        
+        <div className="space-y-6">
+          <button
+            onClick={handleGenerateRoom}
+            disabled={isGenerating}
+            className="px-8 py-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl shadow-lg transition-all disabled:opacity-50"
+          >
+            {isGenerating ? (generationPhase ?? "Generating…") : "Generate Today's Room"}
+          </button>
+          
+          {bothSurveysCompleted ? (
             <button
-              onClick={handleGenerateRoom}
-              disabled={isGenerating}
-              className="px-8 py-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl shadow-lg transition-all disabled:opacity-50"
+              onClick={() => setSurveyState(prev => ({ ...prev, showProductPage: true }))}
+              className="px-8 py-4 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white rounded-xl shadow-lg transition-all duration-300 transform hover:scale-105"
             >
-              {isGenerating ? (generationPhase ?? "Generating…") : "Generate Today's Room"}
+              View Recommended Products 🛍️
             </button>
-            {generationPhase && (
-              <p className="text-sm text-emerald-700">{generationPhase}</p>
-            )}
-            {generationError && (
-              <p className="text-red-600 text-sm">{generationError}</p>
-            )}
-            {generatedImageUrl && (
-              <div className="mx-auto max-w-md">
-                <div className="relative">
-                  <img src={generatedImageUrl} alt="Generated room" className="w-full rounded-xl shadow-lg" />
-                  <div className="absolute inset-0">
-                    <Hotspots boxes={buildDefaultBoxes()} />
-                  </div>
-                </div>
-                <div className="mt-4 flex justify-center">
-                  <button onClick={handleShareRoom} className="px-6 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg">
-                    Share Room
-                  </button>
+          ) : (
+            <div className="px-8 py-4 bg-gray-100 text-gray-600 rounded-xl shadow-lg">
+              <p className="text-sm">
+                🔒 Complete both welcome and daily surveys to unlock personalized product recommendations
+              </p>
+            </div>
+          )}
+          
+          {generatedImageUrl && (
+            <div className="mx-auto max-w-md mt-8">
+              <div className="relative">
+                <img src={generatedImageUrl} alt="Generated room" className="w-full rounded-xl shadow-lg" />
+                <div className="absolute inset-0">
+                  <Hotspots boxes={buildDefaultBoxes()} />
                 </div>
               </div>
-            )}
-            {/* <button
-              onClick={() => setSurveyState(prev => ({
-                ...prev,
-                hasCompletedDailyToday: false,
-                currentQuestionIndex: 0,
-                answers: [],
-                currentAnswer: "",
-              }))}
-              className="px-8 py-4 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white rounded-xl shadow-lg transition-all duration-300 transform hover:scale-105"
-            >
-              Take Another Daily Check-in
-            </button> */}
-
-            <div className="flex gap-3">
-              <button
-                onClick={logSessionStorage}
-                className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-all duration-300"
-              >
-                📊 Log Storage Data
-              </button>
-              
-              <button
-                onClick={clearUserSession}
-                className="px-6 py-3 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-all duration-300"
-              >
-                🗑️ Clear Session
-              </button>
+              <div className="mt-4 flex justify-center">
+                <button onClick={handleShareRoom} className="px-6 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg">
+                  Share Room
+                </button>
+              </div>
             </div>
+          )}
 
-            <p className="text-sm text-gray-500 mt-4">
-              Check console for storage data • Next check-in available tomorrow
-            </p>
+          <div className="flex gap-3 mt-6">
+            <button
+              onClick={logSessionStorage}
+              className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-all duration-300"
+            >
+              📊 Log Storage Data
+            </button>
+            
+            <button
+              onClick={clearUserSession}
+              className="px-6 py-3 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-all duration-300"
+            >
+              🗑️ Clear Session
+            </button>
           </div>
+
+          <p className="text-sm text-gray-500 mt-4">
+            Check console for storage data • Next check-in available tomorrow
+          </p>
         </div>
       </div>
-    );
-  }
+    </div>
+  );
+}
 
   const questions = getCurrentQuestions();
   const isComplete = surveyState.currentQuestionIndex >= questions.length;
-  const answeredCount = surveyState.answers.length;
 
   // Show ProductLink page after completing survey and saving answers
   if (isComplete && surveyState.showProductPage) {
-    const productCards = searches.slice(0, 5).map(search => {
+    const productCards = searches.slice(0, 10).map(search => {
       const products = (search as any)?.products as any[] | null;
       return products && products.length > 0 ? products[0] : null;
     }).filter(Boolean);
@@ -754,33 +863,41 @@ export function App() {
               ? "Welcome aboard! 🎉"
               : "Thanks for checking in! 🌟"}
           </h1>
-          <p className="text-lg text-gray-700 mb-8">
+          <p className="text-lg text-gray-700 mb-4">
             You answered {answeredCount} out of {questions.length} questions.
+            {!surveyState.isNewUser && totalAnsweredCount > 0 && (
+              <span className="block text-sm text-gray-600 mt-2">
+                Total questions answered: {displayAnsweredCount}
+              </span>
+            )}
+          </p>
+          <p className="text-sm text-green-600 mb-8">
+            ✅ Your answers have been automatically saved!
           </p>
 
           {answeredCount > 0 && (
             <div className="space-y-4">
-              <button
-                onClick={saveAnswersToLocalStorage}
-                disabled={surveyState.isSaving}
-                className="px-8 py-4 bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 text-white rounded-xl shadow-lg transition-all duration-300 transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
-              >
-                {surveyState.isSaving ? (
-                  <span className="flex items-center justify-center">
-                    <span className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-3"></span>
-                    Saving...
-                  </span>
-                ) : (
-                  "Save My Answers"
-                )}
-              </button>
+              {surveyState.isSaving && (
+                <div className="flex items-center justify-center mb-4">
+                  <span className="animate-spin rounded-full h-5 w-5 border-b-2 border-green-600 mr-3"></span>
+                  <span className="text-green-700">Saving your answers...</span>
+                </div>
+              )}
 
-              <button
-                onClick={() => setSurveyState(prev => ({ ...prev, showProductPage: true }))}
-                className="px-8 py-4 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white rounded-xl shadow-lg transition-all duration-300 transform hover:scale-105"
-              >
-                View Recommended Products 🛍️
-              </button>
+              {bothSurveysCompleted ? (
+                <button
+                  onClick={() => setSurveyState(prev => ({ ...prev, showProductPage: true }))}
+                  className="px-8 py-4 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white rounded-xl shadow-lg transition-all duration-300 transform hover:scale-105"
+                >
+                  View Recommended Products 🛍️
+                </button>
+              ) : (
+                <div className="px-8 py-4 bg-gray-100 text-gray-600 rounded-xl shadow-lg">
+                  <p className="text-sm">
+                    🔒 Complete both welcome and daily surveys to unlock personalized product recommendations
+                  </p>
+                </div>
+              )}
 
               <button
                 onClick={handleGenerateRoom}
