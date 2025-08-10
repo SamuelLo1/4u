@@ -16,7 +16,6 @@
     "@vitejs/plugin-react": "^4.2.1",
     "tailwindcss": "^4.1.8",
     "typescript": "^5.8.3",
-    "@shopify/shop-minis-cli": "0.0.175",
     "@types/express": "^4.17.21",
     "tsx": "^4.19.1",
     "concurrently": "^9.1.2",

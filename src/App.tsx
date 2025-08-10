@@ -96,7 +96,6 @@ export function App() {
 
   const handleSubmitAnswer = () => {
     console.log("Submitting answer:")
-    getAIResponse("what model do you wish you were?")
     if (surveyState.currentAnswer.trim()) {
       setSurveyState(prev => ({
         currentQuestionIndex: prev.currentQuestionIndex + 1,
