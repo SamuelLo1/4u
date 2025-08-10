@@ -1,6 +1,6 @@
-import React, { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useAsyncStorage, useProductSearch, ProductLink } from "@shopify/shop-minis-react";
-import { saveRoom, shareRoom, composePhasedBase } from "./lib/api";
+import { saveRoom, shareRoom, composePhasedBase, getPersonalityAndProductsFromAnswers } from "./lib/api";
 import { Hotspots } from "./components/Hotspots";
 import { buildDefaultBoxes } from "./lib/slots";
 import { INITIAL_SURVEY_QUESTIONS, DAILY_QUESTIONS, SelectedAnswer, Question } from "./questions";
@@ -72,6 +72,7 @@ export function App() {
   const [generationPhase, setGenerationPhase] = useState<string | null>(null);
   const [totalAnsweredCount, setTotalAnsweredCount] = useState(0);
   const [bothSurveysCompleted, setBothSurveysCompleted] = useState(false);
+  const [llmProfile, setLlmProfile] = useState<{vibe: string; palette: string[]; products: string[]} | null>(null);
 
   // Check if user is new or recurring on component mount
   useEffect(() => {
@@ -84,6 +85,35 @@ export function App() {
       loadDynamicQuestions();
     }
   }, [surveyState.isNewUser, surveyState.hasCompletedDailyToday]);
+
+  // Ensure LLM-generated profile is fetched for product page (no predefined fallbacks)
+  useEffect(() => {
+    if (!surveyState.showProductPage || llmProfile) return;
+    (async () => {
+      try {
+        // Prefer current in-memory answers if available, otherwise load latest saved
+        let answers = surveyState.answers;
+        if (!answers || answers.length === 0) {
+          const existingAnswersJson = await getItem({ key: STORAGE_KEYS.USER_ANSWERS });
+          if (existingAnswersJson) {
+            const entries = JSON.parse(existingAnswersJson) as Array<{type: string; timestamp: string; answers: any[]}>;
+            const initial = entries.find(e => e.type === 'initial');
+            const latest = entries[entries.length - 1];
+            answers = (initial?.answers?.length ? initial.answers : latest?.answers) || [];
+          }
+        }
+        if (answers && answers.length > 0) {
+          const result = await getPersonalityAndProductsFromAnswers(answers as any);
+          const vibe = result.personality?.vibe || '';
+          const paletteArr = (result.personality?.palette || []).slice(0, 3);
+          const queries = (result.products || []).map(p => p.searchQuery).slice(0, 6);
+          setLlmProfile({ vibe, palette: paletteArr, products: queries });
+        }
+      } catch (e) {
+        console.warn('Failed to fetch LLM profile for product page', e);
+      }
+    })();
+  }, [surveyState.showProductPage, llmProfile, getItem, surveyState.answers]);
 
   const checkUserStatus = async () => {
     try {
@@ -261,73 +291,100 @@ export function App() {
     }
   };
 
+  // Check if both welcome and daily surveys have been completed
+  const hasBothSurveysCompleted = async () => {
+    try {
+      const existingAnswersJson = await getItem({ key: STORAGE_KEYS.USER_ANSWERS });
+      if (!existingAnswersJson) return false;
+      
+      const existingAnswers = JSON.parse(existingAnswersJson);
+      const hasInitialSurvey = existingAnswers.some((entry: any) => entry.type === 'initial');
+      const hasDailySurvey = existingAnswers.some((entry: any) => entry.type === 'daily');
+      
+      console.log('🔍 Survey completion check:', { hasInitialSurvey, hasDailySurvey });
+      return hasInitialSurvey && hasDailySurvey;
+    } catch (error) {
+      console.error('Error checking survey completion:', error);
+      return false;
+    }
+  };
+
   const personalityHint = useMemo(() => {
-    const allTags = surveyState.answers.flatMap(a => a.tags);
-    const tagCounts = allTags.reduce((acc, tag) => {
-      acc[tag] = (acc[tag] || 0) + 1;
-      return acc;
-    }, {} as Record<string, number>);
+    if (llmProfile) {
+      return { vibe: llmProfile.vibe, palette: llmProfile.palette.join(', ') }
+    }
+    // No predefined heuristics; rely solely on LLM profile
+    return { vibe: '', palette: '' }
+  }, [llmProfile])
 
-    // Determine vibe based on most frequent tags
-    if (tagCounts['tech-friendly'] || tagCounts['modern'] || tagCounts['sleek']) {
-      return { vibe: "modern tech", palette: "cool grays with neon accents" };
-    }
-    if (tagCounts['outdoor'] || tagCounts['adventure'] || tagCounts['practical']) {
-      return { vibe: "nature-inspired", palette: "greens, wood tones, warm whites" };
-    }
-    if (tagCounts['cozy'] || tagCounts['homebody'] || tagCounts['comfort-first']) {
-      return { vibe: "cozy minimalist", palette: "warm neutrals with gentle contrast" };
-    }
-    if (tagCounts['minimal'] || tagCounts['organized'] || tagCounts['monochrome']) {
-      return { vibe: "calm coastal", palette: "soft blues and sandy neutrals" };
-    }
-    if (tagCounts['vibrant'] || tagCounts['colorful'] || tagCounts['playful']) {
-      return { vibe: "eclectic vibrant", palette: "bright colors with energetic contrasts" };
-    }
-    
-    return { vibe: "cozy minimalist", palette: "warm neutrals with gentle contrast" };
-  }, [surveyState.answers]);
-
-  // Build text queries based on personality to fetch products (6 items)
+  // Build text queries from LLM profile only, always length 6 to keep hooks stable
   const productQueries = useMemo(() => {
-    const vibe = personalityHint.vibe
-    // Rough mapping from vibe to product categories
-    if (vibe.includes('coastal')) return ['bed frame', 'rattan lamp', 'linen bedding', 'ocean wall art', 'indoor plant', 'jute rug']
-    if (vibe.includes('modern')) return ['minimal desk', 'sleek chair', 'LED lamp', 'abstract wall art', 'laptop stand', 'geometric rug']
-    if (vibe.includes('nature')) return ['wood nightstand', 'stoneware lamp', 'cotton bedding', 'botanical wall art', 'planter', 'wool rug']
-    if (vibe.includes('sport')) return ['athletic shoes', 'duffle bag', 'sports rack', 'foam roller', 'water bottle', 'poster frame']
-    return ['bed frame', 'nightstand lamp', 'cotton bedding', 'framed wall art', 'indoor plant', 'area rug']
-  }, [personalityHint.vibe])
+    const arr = (llmProfile?.products || []).slice(0, 6)
+    while (arr.length < 6) arr.push('')
+    return arr
+  }, [llmProfile])
 
-  // Use up to 6 queries; aggregate results
-  const searches = productQueries.slice(0, 6).map(q => useProductSearch({ query: q, first: 10 }))
-  const productTexts = useMemo(() => {
-    const items: string[] = []
-    for (const s of searches) {
-      const ps = (s as any)?.products as any[] | null
-      if (ps && ps.length > 0) {
-        // Take top result name + snippet description
-        const p = ps[0]
-        const title = p?.title || ''
-        const desc = p?.description || p?.descriptionHtml || ''
-        if (title) items.push(`${title}: ${String(desc).slice(0,140)}`)
-      }
-    }
-    return items
-  }, [searches.map(s => (s as any)?.products)?.join('|')])
+  // Call product search hook a fixed number of times to preserve hook order across renders
+  const s0 = useProductSearch({ query: productQueries[0], first: 10 })
+  const s1 = useProductSearch({ query: productQueries[1], first: 10 })
+  const s2 = useProductSearch({ query: productQueries[2], first: 10 })
+  const s3 = useProductSearch({ query: productQueries[3], first: 10 })
+  const s4 = useProductSearch({ query: productQueries[4], first: 10 })
+  const s5 = useProductSearch({ query: productQueries[5], first: 10 })
+  const searches = [s0, s1, s2, s3, s4, s5]
+  // Removed productTexts aggregation; we now rely solely on LLM-provided queries
 
   const handleGenerateRoom = async () => {
     setIsGenerating(true);
     setGenerationError(null);
     setGeneratedImageUrl(null);
 
-    const inventoryText = productTexts.length > 0 ? `\nUse items inspired by: ${productTexts.join('; ')}` : ''
-    const prompt = `An isometric pixel art bedroom with 45-degree walls and a grid floor, cozy, minimalist, clean black outlines, bright saturated colors with subtle dithering. Keep layout realistic and uncluttered. Personality vibe: ${personalityHint.vibe}. Palette: ${personalityHint.palette}. Maintain isometric perspective and consistent camera angle.${inventoryText}`;
+    // Debug: log current answers before starting
+    try {
+      console.group('[Generate] Start')
+      console.log('[Generate] answers', surveyState.answers)
+    } catch {}
+
+    // 1) Ask GPT-4o for personality + 6 products based on Q&A pairs
+    setGenerationPhase('Scoring personality…')
+    let latestQueries: string[] = []
+    let llmVibeForPrompt: string = ''
+    let llmPaletteArrForPrompt: string[] = []
+    try {
+      console.time('[Generate] personality-products')
+      const result = await getPersonalityAndProductsFromAnswers(surveyState.answers)
+      console.timeEnd('[Generate] personality-products')
+      console.log('[Generate] LLM personality', result?.personality)
+      console.log('[Generate] LLM products', result?.products)
+      const vibe = result.personality?.vibe || ''
+      const paletteArr = (result.personality?.palette || []).slice(0,3)
+      const queries = (result.products || []).map(p => p.searchQuery).slice(0,6)
+      latestQueries = queries
+      llmVibeForPrompt = vibe
+      llmPaletteArrForPrompt = paletteArr
+      setLlmProfile({vibe, palette: paletteArr, products: queries})
+      console.log('[Generate] queries', queries)
+    } catch {}
+
+    // 2) Build prompt from queries (not product texts)
+    setGenerationPhase('Building prompt…')
+    const inventoryList = latestQueries.length ? latestQueries : (llmProfile?.products || [])
+    console.log('[Generate] using queries for prompt', inventoryList)
+    const inventoryText = inventoryList.length > 0 ? `\nUse items inspired by: ${inventoryList.join('; ')}` : ''
+    // Use LLM-provided vibe/palette directly from this invocation when available
+    const vibeForPrompt = llmVibeForPrompt || llmProfile?.vibe || ''
+    const paletteForPrompt = (llmPaletteArrForPrompt.length ? llmPaletteArrForPrompt : (llmProfile?.palette || [])).slice(0,3).join(', ')
+    const prompt = `An isometric pixel art bedroom with 45-degree walls and a grid floor, cozy, minimalist, clean black outlines, bright saturated colors with subtle dithering. Keep layout realistic and uncluttered. Personality vibe: ${vibeForPrompt}. Palette: ${paletteForPrompt}. Maintain isometric perspective and consistent camera angle.${inventoryText}`;
+    // Note: productTexts comes from previous search results and may lag; not used in the prompt anymore
+    console.log('[Generate] prompt', prompt)
 
     try {
       // Phased feedback for UX
       setGenerationPhase('Generating room…')
-      const { baseB64 } = await composePhasedBase({ prompt, paletteHint: personalityHint.palette })
+      console.time('[Generate] base-room')
+      const { baseB64 } = await composePhasedBase({ prompt, paletteHint: paletteForPrompt })
+      console.timeEnd('[Generate] base-room')
+      console.log('[Generate] base size (bytes)', baseB64?.length)
 
       // Pure text-based approach: no sprites; the base image is the final image
       setGenerationPhase('Finalizing…')
@@ -337,12 +394,15 @@ export function App() {
       if (imageUrl) {
         const { roomId } = await saveRoom({ seed: Math.floor(Math.random()*1e7), imageUrl })
         setLastRoomId(roomId)
+        console.log('[Generate] saved roomId', roomId)
       }
     } catch (err: any) {
       setGenerationError(err?.message ?? "Failed to generate room");
+      console.error('[Generate] error', err)
     } finally {
       setIsGenerating(false);
       setGenerationPhase(null)
+      try { console.groupEnd() } catch {}
     }
   };
 
