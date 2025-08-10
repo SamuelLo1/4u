@@ -83,7 +83,7 @@ app.get('/health', (_req, res) => {
   res.json({ok: true})
 })
 
-// Personality + 6 products using OpenAI (gpt-4o) from Q/A pairs with tags
+// Personality + 10 products using OpenAI (gpt-4o) from Q/A pairs with tags
 app.post('/api/personality-products', async (req: Request, res: Response) => {
   const {userAnswers} = req.body as {userAnswers: Array<{questionId: string; choiceId: string; choiceText: string; tags: string[]}>}
   if (!Array.isArray(userAnswers)) return res.status(400).json({error: 'invalid_payload'})
@@ -93,7 +93,7 @@ app.post('/api/personality-products', async (req: Request, res: Response) => {
     ).sort((a,b) => b[1]-a[1]).slice(0,8).map(([t]) => t)
 
     const model = process.env.OPENAI_PROFILE_MODEL || 'gpt-4o'
-    const system = `You are an interior stylist and product curator for bedroom setups. Given user Q&A pairs and tags, infer a concise personality and propose exactly 6 purchasable bedroom product ideas.
+    const system = `You are an interior stylist and product curator for bedroom setups. Given user Q&A pairs and tags, infer a concise personality and propose exactly 10 purchasable bedroom product ideas.
 Return STRICT JSON only matching this schema:
 {
   "personality": {"label": "string","description": "string","palette": ["string","string","string"],"vibe": "string","materials": ["string","string"],"budget": "LOW|MID|HIGH"},
@@ -113,7 +113,7 @@ Return STRICT JSON only matching this schema:
     let data: any
     try { data = JSON.parse(text) } catch { const m = text.match(/\{[\s\S]*\}/); if (!m) throw new Error('no_json'); data = JSON.parse(m[0]) }
     if (!data?.personality || !Array.isArray(data?.products)) return res.status(502).json({error: 'bad_llm_output'})
-    const products = (data.products as any[]).slice(0, 6).map(p => ({
+    const products = (data.products as any[]).slice(0, 10).map(p => ({
       name: String(p?.name || ''),
       searchQuery: String(p?.searchQuery || p?.name || ''),
       category: String(p?.category || ''),
@@ -121,7 +121,7 @@ Return STRICT JSON only matching this schema:
       colorHints: Array.isArray(p?.colorHints) ? p.colorHints : [],
       rationale: String(p?.rationale || ''),
     }))
-    while (products.length < 6) products.push({name: 'nightstand lamp', searchQuery: 'nightstand lamp', category: 'LAMP', styleHints: [], colorHints: [], rationale: ''})
+    while (products.length < 10) products.push({name: 'nightstand lamp', searchQuery: 'nightstand lamp', category: 'LAMP', styleHints: [], colorHints: [], rationale: ''})
     res.json({personality: data.personality, products})
   } catch (e: any) {
     console.error('personality-products failed', e)

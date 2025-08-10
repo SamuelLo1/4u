@@ -106,7 +106,7 @@ export function App() {
           const result = await getPersonalityAndProductsFromAnswers(answers as any);
           const vibe = result.personality?.vibe || '';
           const paletteArr = (result.personality?.palette || []).slice(0, 3);
-          const queries = (result.products || []).map(p => p.searchQuery).slice(0, 6);
+          const queries = (result.products || []).map(p => p.searchQuery).slice(0, 10);
           setLlmProfile({ vibe, palette: paletteArr, products: queries });
         }
       } catch (e) {
@@ -291,24 +291,6 @@ export function App() {
     }
   };
 
-  // Check if both welcome and daily surveys have been completed
-  const hasBothSurveysCompleted = async () => {
-    try {
-      const existingAnswersJson = await getItem({ key: STORAGE_KEYS.USER_ANSWERS });
-      if (!existingAnswersJson) return false;
-      
-      const existingAnswers = JSON.parse(existingAnswersJson);
-      const hasInitialSurvey = existingAnswers.some((entry: any) => entry.type === 'initial');
-      const hasDailySurvey = existingAnswers.some((entry: any) => entry.type === 'daily');
-      
-      console.log('🔍 Survey completion check:', { hasInitialSurvey, hasDailySurvey });
-      return hasInitialSurvey && hasDailySurvey;
-    } catch (error) {
-      console.error('Error checking survey completion:', error);
-      return false;
-    }
-  };
-
   const personalityHint = useMemo(() => {
     if (llmProfile) {
       return { vibe: llmProfile.vibe, palette: llmProfile.palette.join(', ') }
@@ -317,10 +299,10 @@ export function App() {
     return { vibe: '', palette: '' }
   }, [llmProfile])
 
-  // Build text queries from LLM profile only, always length 6 to keep hooks stable
+  // Build text queries from LLM profile only, always length 10 to keep hooks stable
   const productQueries = useMemo(() => {
-    const arr = (llmProfile?.products || []).slice(0, 6)
-    while (arr.length < 6) arr.push('')
+    const arr = (llmProfile?.products || []).slice(0, 10)
+    while (arr.length < 10) arr.push('')
     return arr
   }, [llmProfile])
 
@@ -331,7 +313,11 @@ export function App() {
   const s3 = useProductSearch({ query: productQueries[3], first: 10 })
   const s4 = useProductSearch({ query: productQueries[4], first: 10 })
   const s5 = useProductSearch({ query: productQueries[5], first: 10 })
-  const searches = [s0, s1, s2, s3, s4, s5]
+  const s6 = useProductSearch({ query: productQueries[6], first: 10 })
+  const s7 = useProductSearch({ query: productQueries[7], first: 10 })
+  const s8 = useProductSearch({ query: productQueries[8], first: 10 })
+  const s9 = useProductSearch({ query: productQueries[9], first: 10 })
+  const searches = [s0, s1, s2, s3, s4, s5, s6, s7, s8, s9]
   // Removed productTexts aggregation; we now rely solely on LLM-provided queries
 
   const handleGenerateRoom = async () => {
@@ -358,7 +344,7 @@ export function App() {
       console.log('[Generate] LLM products', result?.products)
       const vibe = result.personality?.vibe || ''
       const paletteArr = (result.personality?.palette || []).slice(0,3)
-      const queries = (result.products || []).map(p => p.searchQuery).slice(0,6)
+      const queries = (result.products || []).map(p => p.searchQuery).slice(0,10)
       latestQueries = queries
       llmVibeForPrompt = vibe
       llmPaletteArrForPrompt = paletteArr
@@ -581,7 +567,7 @@ export function App() {
   };
 
   if (surveyState.showProductPage) {
-    const productCards = searches.slice(0, 5).map(search => {
+    const productCards = searches.slice(0, 10).map(search => {
       const products = (search as any)?.products as any[] | null;
       return products && products.length > 0 ? products[0] : null;
     }).filter(Boolean);
@@ -821,7 +807,7 @@ export function App() {
 
   // Show ProductLink page after completing survey and saving answers
   if (isComplete && surveyState.showProductPage) {
-    const productCards = searches.slice(0, 5).map(search => {
+    const productCards = searches.slice(0, 10).map(search => {
       const products = (search as any)?.products as any[] | null;
       return products && products.length > 0 ? products[0] : null;
     }).filter(Boolean);
